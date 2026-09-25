@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bonus question</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --enamel: #0c1a13; --panel: #14291e; --rule: #2c4a36;
+    --lamp: #ffa81e; --lamp-dim: #59400f;
+    --paper: #efede3; --muted: #7d9a86; --warn: #ff6b4a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; background: transparent;
+    font-family: "Barlow Condensed", "Oswald", "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased;
+  }
+  body {
+    display: flex; align-items: flex-end; justify-content: center;
+    min-height: 100vh; padding: 24px;
+  }
+  .band {
+    width: 1100px; background: var(--enamel);
+    border: 2px solid var(--rule); border-top: 4px solid var(--lamp);
+    border-radius: 3px; box-shadow: 0 0 0 1px #000a, 0 18px 44px #0009;
+    overflow: hidden;
+    transform: translateY(140%); opacity: 0;
+    transition: transform 520ms cubic-bezier(.2,.8,.2,1), opacity 300ms;
+  }
+  .band.up { transform: none; opacity: 1; }
+
+  .head {
+    display: grid; grid-template-columns: auto 1fr auto;
+    align-items: center; gap: 18px;
+    padding: 14px 22px 12px; background: var(--panel);
+    border-bottom: 2px solid var(--rule);
+  }
+  .chip {
+    padding: 3px 10px 2px; border-radius: 2px;
+    background: var(--lamp); color: var(--enamel);
+    font-size: 19px; font-weight: 700;
+  }
+  .q {
+    font-size: 36px; font-weight: 700; color: var(--paper); line-height: 1.02;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .clock {
+    font-size: 50px; font-weight: 700; line-height: .9; color: var(--lamp);
+    text-shadow: 0 0 16px #ffa81e55; min-width: 110px; text-align: right;
+  }
+  .clock.late { color: var(--warn); text-shadow: 0 0 16px #ff6b4a55; }
+  .clock.done { font-size: 30px; color: var(--muted); text-shadow: none; }
+
+  .opts { padding: 6px 0; }
+  .opt {
+    display: grid; grid-template-columns: 34px 250px 96px 1fr 120px;
+    align-items: center; gap: 0 18px;
+    padding: 7px 24px 7px 22px; border-bottom: 1px solid #1b3225;
+    transition: opacity 400ms;
+  }
+  .opt:last-child { border-bottom: 0; }
+  .cloth {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    border-radius: 2px; font-size: 21px; font-weight: 700; color: var(--enamel);
+    box-shadow: inset 0 0 0 1px #0006;
+  }
+  .nm { font-size: 31px; font-weight: 600; color: var(--paper); line-height: 1; }
+  .pct {
+    font-size: 34px; font-weight: 700; color: var(--lamp); text-align: right;
+    text-shadow: 0 0 12px #ffa81e4d;
+  }
+  .pct.cold { color: var(--lamp-dim); text-shadow: none; }
+  .bar {
+    height: 12px; background: #12241b; border: 1px solid var(--rule);
+    position: relative; overflow: hidden;
+  }
+  .bar span {
+    position: absolute; inset: 0 auto 0 0; background: var(--lamp); opacity: .82;
+    transition: width 600ms cubic-bezier(.22,.61,.36,1);
+  }
+  .amt { text-align: right; font-size: 24px; font-weight: 600; color: #a8c3b1; }
+
+  .settled .opt { opacity: .32; }
+  .settled .opt.win { opacity: 1; background: #1c3a26; }
+  .settled .opt.win .nm::after {
+    content: "  wins"; color: var(--lamp); font-size: 22px; font-weight: 700;
+  }
+
+  .rail {
+    display: flex; justify-content: space-between; align-items: center; gap: 20px;
+    padding: 9px 22px; background: var(--panel); border-top: 2px solid var(--rule);
+    font-size: 19px; font-weight: 500; color: var(--muted);
+  }
+  .rail b { color: var(--lamp); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .band { transition: opacity 200ms; transform: none; }
+    .bar span { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="band" id="band">
+  <div class="head">
+    <div class="chip">Bonus</div>
+    <div class="q" id="q"></div>
+    <div class="clock" id="clock"></div>
+  </div>
+  <div class="opts" id="opts"></div>
+  <div class="rail">
+    <span id="how"></span>
+    <span>Fake points only. Nothing here is real money.</span>
+  </div>
+</div>
+
+<script>
+let bonus = null, skew = 0;
+const fmt = n => n.toLocaleString("en-US");
+
+async function poll() {
+  try {
+    const d = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json();
+    skew = d.now * 1000 - Date.now();
+    bonus = d.bonus || null;
+  } catch { /* hold what's on screen */ }
+  render();
+}
+
+function render() {
+  const band = document.getElementById("band");
+  if (!bonus) { band.classList.remove("up"); return; }
+  band.classList.add("up");
+  band.classList.toggle("settled", bonus.state === "settled");
+
+  document.getElementById("q").textContent = bonus.question;
+
+  const clock = document.getElementById("clock");
+  clock.className = "clock";
+  if (bonus.state === "open") {
+    const left = Math.max(0, bonus.closes_at - (Date.now() + skew) / 1000);
+    const s = Math.ceil(left);
+    clock.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    if (left <= 10) clock.classList.add("late");
+  } else if (bonus.state === "locked") {
+    clock.textContent = "Locked";
+    clock.classList.add("done");
+  } else {
+    clock.textContent = bonus.result === "VOID" ? "Void" : "Final";
+    clock.classList.add("done");
+  }
+
+  document.getElementById("how").innerHTML =
+    bonus.state === "open"
+      ? `Tap an answer on the bonus post in Discord. Pays <b>${bonus.multiplier}x</b>.`
+      : `${fmt(bonus.tickets)} tickets, ${fmt(bonus.staked)} points down.`;
+
+  const host = document.getElementById("opts");
+  host.innerHTML = "";
+  const top = Math.max(1, ...bonus.options.map(o => o.staked));
+  for (const o of bonus.options) {
+    const row = document.createElement("div");
+    row.className = "opt" + (bonus.result === o.name ? " win" : "");
+    const pct = bonus.staked ? Math.round(o.share * 100) + "%" : "—";
+    row.innerHTML = `
+      <div class="cloth" style="background:${o.color}">${o.slot || ""}</div>
+      <div class="nm"></div>
+      <div class="pct ${o.staked ? "" : "cold"}">${pct}</div>
+      <div class="bar"><span style="width:${o.staked / top * 100}%"></span></div>
+      <div class="amt">${fmt(o.staked)}</div>`;
+    row.querySelector(".nm").textContent = o.name;
+    host.appendChild(row);
+  }
+}
+
+setInterval(poll, 1500);
+setInterval(render, 500);
+poll();
+</script>
+</body>
+</html>

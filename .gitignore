@@ -1,0 +1,12 @@
+# The season lives here locally. On Railway it lives on the volume.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env

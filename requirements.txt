@@ -1,0 +1,5 @@
+# Exact versions the tests passed on. Upgrade on purpose, then rerun the tests.
+discord.py==2.7.1
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4

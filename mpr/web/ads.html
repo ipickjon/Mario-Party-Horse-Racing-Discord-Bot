@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ad slot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --enamel: #0c1a13; --panel: #14291e; --rule: #2c4a36;
+    --paper: #efede3; --muted: #7d9a86; --accent: #ffa81e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; background: transparent;
+    font-family: "Barlow Condensed", "Oswald", "Arial Narrow", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 16px;
+  }
+  .slot {
+    position: relative;
+    width: 1180px; height: 172px;
+    background: var(--enamel);
+    border: 2px solid var(--rule);
+    border-left: 10px solid var(--accent);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px #000a, 0 14px 34px #0009;
+    overflow: hidden;
+    display: flex; align-items: center;
+  }
+  .slot[hidden] { display: none; }
+
+  .copy { padding: 20px 30px; max-width: 62ch; }
+  .headline {
+    font-size: 50px; font-weight: 700; line-height: .98;
+    color: var(--paper); margin: 0;
+  }
+  .body {
+    margin: 9px 0 0; font-size: 25px; font-weight: 500;
+    line-height: 1.22; color: var(--muted);
+  }
+  .tag {
+    position: absolute; right: 18px; bottom: 12px;
+    padding: 3px 10px 2px; border-radius: 2px;
+    background: var(--accent); color: #0c1a13;
+    font-size: 16px; font-weight: 600;
+  }
+  .tag:empty { display: none; }
+
+  /* image ads fill the slot instead */
+  .shot {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; object-fit: cover;
+  }
+
+  /* dwell timer along the bottom edge */
+  .timer {
+    position: absolute; left: 0; bottom: 0; height: 3px;
+    background: var(--accent); opacity: .55; width: 0;
+  }
+  .timer.run { transition: width linear; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .timer { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="slot" id="slot" hidden>
+  <img class="shot" id="shot" alt="" hidden>
+  <div class="copy" id="copy">
+    <h1 class="headline" id="headline"></h1>
+    <p class="body" id="body"></p>
+  </div>
+  <div class="tag" id="tag"></div>
+  <div class="timer" id="timer"></div>
+</div>
+
+<script>
+let slots = [], dwell = 12000, cursor = 0, timer = null;
+
+function expand(config) {
+  // weight decides how often a slot comes up; default 1
+  const out = [];
+  for (const s of config.slots || []) {
+    const n = Math.max(1, Math.min(10, Math.round(s.weight || 1)));
+    for (let i = 0; i < n; i++) out.push(s);
+  }
+  return out;
+}
+
+async function poll() {
+  try {
+    const data = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json();
+    const config = data.ads || { slots: [] };
+    dwell = Math.max(4, config.dwell_seconds || 12) * 1000;
+    const next = expand(config);
+    // Only reshuffle when the config actually changed, so an edit mid-show
+    // doesn't restart the rotation on every poll.
+    if (JSON.stringify(next) !== JSON.stringify(slots)) {
+      slots = next;
+      cursor = 0;
+      show();
+    }
+  } catch {
+    // Leave whatever is on screen.
+  }
+}
+
+function show() {
+  const slot = document.getElementById("slot");
+  if (!slots.length) { slot.hidden = true; return; }
+  slot.hidden = false;
+
+  const ad = slots[cursor % slots.length];
+  slot.style.setProperty("--accent", ad.accent || "#ffa81e");
+
+  const shot = document.getElementById("shot");
+  const copy = document.getElementById("copy");
+  if (ad.image) {
+    shot.src = "/ads/img/" + ad.image + location.search;
+    shot.hidden = false;
+    copy.hidden = true;
+  } else {
+    shot.hidden = true;
+    copy.hidden = false;
+    document.getElementById("headline").textContent = ad.headline || "";
+    const body = document.getElementById("body");
+    body.textContent = ad.body || "";
+    body.hidden = !ad.body;
+  }
+  document.getElementById("tag").textContent = ad.tag || "";
+
+  const bar = document.getElementById("timer");
+  bar.classList.remove("run");
+  bar.style.width = "0";
+  void bar.offsetWidth;                       // restart the transition
+  bar.style.transitionDuration = dwell + "ms";
+  bar.classList.add("run");
+  bar.style.width = "100%";
+
+  clearTimeout(timer);
+  timer = setTimeout(() => { cursor++; show(); }, dwell);
+}
+
+setInterval(poll, 5000);
+poll();
+</script>
+</body>
+</html>

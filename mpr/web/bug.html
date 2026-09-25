@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scorebug</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --enamel: #0c1a13; --panel: #14291e; --rule: #2c4a36;
+    --lamp: #ffa81e; --lamp-dim: #59400f;
+    --paper: #efede3; --muted: #7d9a86; --warn: #ff6b4a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; background: transparent;
+    font-family: "Barlow Condensed", "Oswald", "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased;
+  }
+  body { padding: 24px; }
+  .bug {
+    width: 430px; background: var(--enamel);
+    border: 2px solid var(--rule); border-radius: 3px;
+    box-shadow: 0 0 0 1px #000a, 0 14px 34px #0009; overflow: hidden;
+  }
+  .bug[hidden] { display: none; }
+
+  .top {
+    background: var(--panel); border-bottom: 2px solid var(--rule);
+    padding: 12px 18px 12px;
+  }
+  .where {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 18px; font-weight: 500; color: var(--muted);
+  }
+  .main {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 14px; margin-top: 4px;
+  }
+  .what {
+    font-size: 29px; font-weight: 700; color: var(--paper); line-height: 1.02;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; min-width: 0;
+  }
+  .big {
+    font-size: 46px; font-weight: 700; line-height: .95; color: var(--lamp);
+    text-shadow: 0 0 16px #ffa81e55; white-space: nowrap;
+  }
+  .big small { font-size: 24px; color: var(--muted); text-shadow: none; font-weight: 600; }
+  .big.over { color: var(--warn); text-shadow: 0 0 16px #ff6b4a55; }
+  .track {
+    margin-top: 10px; height: 6px; background: #0f2018;
+    border: 1px solid var(--rule); position: relative; overflow: hidden;
+  }
+  .track span {
+    position: absolute; inset: 0 auto 0 0; background: var(--lamp); opacity: .8;
+    transition: width 600ms cubic-bezier(.22,.61,.36,1);
+  }
+  .flag {
+    margin-top: 8px; display: inline-block;
+    padding: 2px 9px 1px; border-radius: 2px;
+    background: var(--lamp); color: var(--enamel);
+    font-size: 17px; font-weight: 700;
+  }
+  .flag[hidden] { display: none; }
+
+  table { width: 100%; border-collapse: collapse; }
+  table[hidden] { display: none; }
+  th {
+    font-size: 16px; font-weight: 500; color: var(--muted);
+    text-align: right; padding: 8px 18px 2px 0;
+  }
+  th:first-child { text-align: left; padding-left: 18px; }
+  td { padding: 5px 18px 5px 0; border-top: 1px solid #1b3225; }
+  td.who { padding-left: 18px; }
+  .who div { display: flex; align-items: center; gap: 10px; }
+  .cloth {
+    width: 26px; height: 26px; display: grid; place-items: center;
+    border-radius: 2px; font-size: 17px; font-weight: 700; color: var(--enamel);
+    box-shadow: inset 0 0 0 1px #0006; flex: none;
+  }
+  .nm { font-size: 24px; font-weight: 600; color: var(--paper); }
+  td.n {
+    text-align: right; width: 76px;
+    font-size: 26px; font-weight: 600; color: #a8c3b1;
+  }
+  td.n.lead { color: var(--lamp); font-weight: 700; text-shadow: 0 0 12px #ffa81e4d; }
+  td.n.bump { animation: bump 500ms ease-out; }
+  @keyframes bump { 0% { transform: scale(1.35) } 100% { transform: scale(1) } }
+
+  .next {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 8px 18px; background: var(--panel); border-top: 2px solid var(--rule);
+    font-size: 18px; font-weight: 500; color: var(--muted);
+  }
+  .next b { color: var(--paper); font-weight: 600; }
+  .next[hidden] { display: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    td.n.bump { animation: none; }
+    .track span { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="bug" id="bug" hidden>
+  <div class="top">
+    <div class="where"><span id="week"></span><span id="seg"></span></div>
+    <div class="main">
+      <div class="what" id="what"></div>
+      <div class="big" id="big"></div>
+    </div>
+    <div class="track" id="track"><span id="fill"></span></div>
+    <div class="flag" id="flag" hidden>Last five turns</div>
+  </div>
+  <table id="table" hidden>
+    <thead><tr><th>Live count</th><th>? tiles</th><th>Games</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="next" id="next" hidden></div>
+</div>
+
+<script>
+let data = null, skew = 0, last = {};
+
+async function poll() {
+  try {
+    const d = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json();
+    skew = d.now * 1000 - Date.now();
+    data = d.race ? d : null;
+  } catch { /* keep the last good state on screen */ }
+  render();
+}
+
+const clock = s => {
+  s = Math.max(0, Math.round(s));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+};
+
+function render() {
+  const bug = document.getElementById("bug");
+  if (!data) { bug.hidden = true; return; }
+  bug.hidden = false;
+
+  const r = data.race, show = data.show;
+  const seg = show && show.current;
+  const isGame = seg ? seg.kind === "game" : r.turn > 0;
+
+  document.getElementById("week").textContent =
+    r.week + (data.season ? " — " + data.season.name : "");
+  document.getElementById("seg").textContent =
+    show ? `Segment ${show.index + 1} of ${show.count}` : "";
+
+  const what = document.getElementById("what");
+  const big = document.getElementById("big");
+  const fill = document.getElementById("fill");
+  big.classList.remove("over");
+
+  if (isGame) {
+    what.textContent = seg ? seg.name : "The race";
+    big.innerHTML = `${r.turn}<small> / ${r.total_turns}</small>`;
+    fill.style.width = (r.turn / r.total_turns * 100) + "%";
+  } else if (seg) {
+    what.textContent = seg.name;
+    const now = (Date.now() + skew) / 1000;
+    const left = seg.minutes * 60 - (now - show.started);
+    if (left >= 0) {
+      big.textContent = clock(left);
+    } else {
+      big.textContent = "+" + clock(-left);
+      big.classList.add("over");
+    }
+    fill.style.width = Math.min(100, (now - show.started) / (seg.minutes * 60) * 100) + "%";
+  } else {
+    what.textContent = r.status === "open" ? "Betting open" : r.week;
+    big.textContent = "";
+    fill.style.width = "0";
+  }
+
+  const remaining = r.total_turns - r.turn;
+  document.getElementById("flag").hidden = !(isGame && r.turn > 0 && remaining < 5);
+
+  const table = document.getElementById("table");
+  table.hidden = !(isGame || data.tallies.some(t => t.qtiles || t.minigames));
+  const rows = document.getElementById("rows");
+  rows.innerHTML = "";
+  for (const t of data.tallies) {
+    const tr = document.createElement("tr");
+    const cells = [["qtiles", t.qtiles], ["minigames", t.minigames]].map(([k, v]) => {
+      const id = k + ":" + t.name;
+      const moved = last[id] !== undefined && last[id] !== v;
+      last[id] = v;
+      const lead = data.leaders[k] === t.name;
+      return `<td class="n ${lead ? "lead" : ""} ${moved ? "bump" : ""}">${v}</td>`;
+    }).join("");
+    tr.innerHTML = `<td class="who"><div><span class="cloth" style="background:${t.color}">${t.slot || ""}</span>` +
+                   `<span class="nm"></span></div></td>` + cells;
+    tr.querySelector(".nm").textContent = t.name;
+    rows.appendChild(tr);
+  }
+
+  const next = document.getElementById("next");
+  if (show && show.next) {
+    next.hidden = false;
+    next.innerHTML = `<span>Up next <b></b></span><span>${show.next.minutes} min</span>`;
+    next.querySelector("b").textContent = show.next.name;
+  } else {
+    next.hidden = true;
+  }
+}
+
+setInterval(poll, 2000);
+setInterval(render, 1000);
+poll();
+</script>
+</body>
+</html>

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tote board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --enamel:   #0c1a13;
+    --panel:    #14291e;
+    --rule:     #2c4a36;
+    --lamp:     #ffa81e;
+    --lamp-dim: #59400f;
+    --paper:    #efede3;
+    --muted:    #7d9a86;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; background: transparent;
+    font-family: "Barlow Condensed", "Oswald", "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    display: flex; align-items: flex-end; justify-content: center;
+    min-height: 100vh; padding: 24px;
+  }
+  .board {
+    width: 1500px;
+    background: var(--enamel);
+    border: 2px solid var(--rule);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px #000a, 0 18px 44px #0009;
+    overflow: hidden;
+  }
+  .board[hidden] { display: none; }
+  .deck { display: grid; grid-template-columns: 300px 1fr; }
+
+  /* left plate: the market and what it pays */
+  .plate {
+    background: var(--panel);
+    border-right: 2px solid var(--rule);
+    padding: 18px 22px 16px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .week { font-size: 19px; font-weight: 500; color: var(--muted); }
+  .market {
+    font-size: 38px; font-weight: 700; line-height: .96;
+    color: var(--paper); margin: 8px 0 0;
+  }
+  .pays { margin-top: 14px; }
+  .pays .n {
+    font-size: 46px; font-weight: 700; line-height: 1;
+    color: var(--lamp); text-shadow: 0 0 16px #ffa81e55;
+  }
+  .pays .cap { font-size: 18px; font-weight: 500; color: var(--muted); }
+  .ladder {
+    margin-top: 10px;
+    display: grid; grid-template-columns: repeat(3, 1fr) auto;
+    align-items: end; gap: 0 8px;
+  }
+  .ladder div { text-align: center; }
+  .ladder .k { font-size: 17px; font-weight: 500; color: var(--muted); }
+  .ladder .m { font-size: 23px; font-weight: 700; color: var(--lamp); line-height: 1; }
+  .ladder .cap {
+    font-size: 15px; font-weight: 500; color: var(--muted);
+    text-align: left; padding-bottom: 2px; line-height: 1.05;
+  }
+
+  /* right: where the money is */
+  .runners { padding: 7px 0; }
+  .runner {
+    display: grid;
+    grid-template-columns: 38px 224px 112px 1fr 138px;
+    align-items: center; gap: 0 20px;
+    padding: 8px 26px 8px 20px;
+    border-bottom: 1px solid #1b3225;
+  }
+  .runner:last-child { border-bottom: 0; }
+  .silk {
+    width: 38px; height: 38px;
+    display: grid; place-items: center; border-radius: 2px;
+    font-size: 24px; font-weight: 700; color: #0c1a13;
+    box-shadow: inset 0 0 0 1px #0006;
+  }
+  .name {
+    font-size: 34px; font-weight: 600; letter-spacing: .005em;
+    color: var(--paper); line-height: 1;
+  }
+  .share {
+    font-size: 38px; font-weight: 700; line-height: 1;
+    color: var(--lamp); text-align: right;
+    text-shadow: 0 0 14px #ffa81e5c;
+  }
+  .share.cold { color: var(--lamp-dim); text-shadow: none; }
+  .share.flick { animation: flick 420ms steps(1, end); }
+  @keyframes flick {
+    0%, 100% { opacity: 1 } 18%, 52% { opacity: .18 } 34%, 74% { opacity: 1 }
+  }
+  .bar {
+    height: 13px; background: #12241b;
+    border: 1px solid var(--rule); position: relative; overflow: hidden;
+  }
+  .bar span {
+    position: absolute; inset: 0 auto 0 0;
+    background: var(--lamp); opacity: .82;
+    transition: width 700ms cubic-bezier(.22,.61,.36,1);
+  }
+  .staked {
+    text-align: right; font-size: 26px; font-weight: 600; color: #a8c3b1;
+  }
+  .staked em { font-style: normal; font-size: 18px; color: var(--muted); }
+
+  .rail {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 9px 24px; background: var(--panel);
+    border-top: 2px solid var(--rule);
+    font-size: 19px; font-weight: 500; color: var(--muted);
+  }
+  .status { color: var(--lamp); font-weight: 600; }
+  .status.locked { color: var(--muted); }
+  .dwell { display: flex; gap: 6px; align-items: center; }
+  .dwell i {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--lamp-dim);
+  }
+  .dwell i.on { background: var(--lamp); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .share.flick { animation: none; }
+    .bar span { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="board" id="board" hidden>
+  <div class="deck">
+    <div class="plate">
+      <div>
+        <div class="week" id="week"></div>
+        <div class="market" id="market"></div>
+      </div>
+      <div>
+        <div class="pays">
+          <div class="n" id="pays"></div>
+          <div class="cap" id="payscap"></div>
+        </div>
+        <div class="ladder" id="ladder"></div>
+      </div>
+    </div>
+    <div class="runners" id="runners"></div>
+  </div>
+  <div class="rail">
+    <div>Fake points only. Nothing on this board is real money.</div>
+    <div class="dwell" id="dwell"></div>
+    <div class="status" id="status"></div>
+  </div>
+</div>
+
+<script>
+const DWELL = 8000, POLL = 3000;
+let state = null, cursor = 0, lastShare = {};
+const fmt = n => n.toLocaleString("en-US");
+
+async function poll() {
+  try {
+    const next = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json();
+    state = next.race ? next : null;
+  } catch {
+    // Server restarting mid-show. Hold the last good board rather than blank out.
+  }
+  render();
+}
+
+function liveMarkets() {
+  if (!state) return [];
+  const open = state.markets.filter(m => m.status !== "settled");
+  return open.length ? open : state.markets;
+}
+
+function render() {
+  const board = document.getElementById("board");
+  const markets = liveMarkets();
+  if (!state || !markets.length) { board.hidden = true; return; }
+  board.hidden = false;
+
+  const m = markets[cursor % markets.length];
+  const isProp = m.kind === "prop";
+
+  document.getElementById("week").textContent = state.race.week;
+  document.getElementById("market").textContent = m.label;
+
+  if (isProp) {
+    document.getElementById("pays").textContent = m.multiplier + "x";
+    document.getElementById("payscap").textContent = "on a correct call";
+    document.getElementById("ladder").textContent = "";
+  } else {
+    const top = state.ladder[state.ladder.length - 1];
+    document.getElementById("pays").textContent = top.multiplier + "x";
+    document.getElementById("payscap").textContent =
+      `if you get all ${state.field_size} right`;
+    const ladder = document.getElementById("ladder");
+    if (state.ladder.length <= 4) {
+      ladder.innerHTML =
+        state.ladder
+          .map(l => `<div><div class="k">${l.correct}</div>` +
+                    `<div class="m">${l.multiplier}x</div></div>`)
+          .join("") +
+        `<div class="cap">places<br>right</div>`;
+    } else {
+      ladder.innerHTML = `<div class="cap">each place right<br>adds 1x</div>`;
+    }
+  }
+
+  const status = document.getElementById("status");
+  const open = state.race.status === "open";
+  status.textContent = open ? "Betting open" : "Betting locked";
+  status.classList.toggle("locked", !open);
+
+  document.getElementById("dwell").innerHTML = markets
+    .map((_, i) => `<i class="${i === cursor % markets.length ? "on" : ""}"></i>`)
+    .join("");
+
+  const host = document.getElementById("runners");
+  host.innerHTML = "";
+  const top = Math.max(1, ...m.runners.map(r => r.staked));
+
+  for (const r of m.runners) {
+    const pct = m.staked ? Math.round(r.share * 100) : 0;
+    const text = m.staked ? pct + "%" : "—";
+    const id = m.kind + ":" + m.key + ":" + r.name;
+    const moved = lastShare[id] !== undefined && lastShare[id] !== text;
+    lastShare[id] = text;
+
+    const row = document.createElement("div");
+    row.className = "runner";
+    row.innerHTML = `
+      <div class="silk" style="background:${r.color}">${r.slot}</div>
+      <div class="name"></div>
+      <div class="share ${r.staked ? "" : "cold"} ${moved ? "flick" : ""}"></div>
+      <div class="bar"><span style="width:${(r.staked / top) * 100}%"></span></div>
+      <div class="staked">${fmt(r.staked)} <em>in</em></div>`;
+    row.querySelector(".name").textContent = r.name;
+    row.querySelector(".share").textContent = text;
+    host.appendChild(row);
+  }
+}
+
+setInterval(poll, POLL);
+setInterval(() => { cursor++; render(); }, DWELL);
+poll();
+</script>
+</body>
+</html>

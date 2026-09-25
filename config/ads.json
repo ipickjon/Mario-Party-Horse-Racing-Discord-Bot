@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "Fake ads for the broadcast layout. Edit this file between shows; the",
+    "overlay picks up changes on its next poll, no restart needed.",
+    "",
+    "Each slot needs a headline. Everything else is optional:",
+    "  body    one line under the headline",
+    "  tag     small text in the corner, e.g. who made it",
+    "  accent  hex colour for the rule and the tag",
+    "  image   filename inside config/ads/ — if set, the image fills the",
+    "          slot and headline/body are ignored",
+    "  weight  how often this slot comes up, default 1",
+    "",
+    "Keep at least one Discord promo in rotation."
+  ],
+
+  "dwell_seconds": 12,
+
+  "slots": [
+    {
+      "headline": "Join the Discord",
+      "body": "Place your bets, argue about Peach, get pinged when we go live.",
+      "tag": "the only real link on this board",
+      "accent": "#5865f2",
+      "weight": 3
+    },
+    {
+      "headline": "Bowser Bros. Demolition",
+      "body": "Your castle, our problem. Forty years of unsolicited renovation.",
+      "tag": "not a real company",
+      "accent": "#e5453a"
+    },
+    {
+      "headline": "Toad's Discount Mushrooms",
+      "body": "One size. No refunds. Ask about the green ones.",
+      "tag": "not a real company",
+      "accent": "#3fae5a"
+    },
+    {
+      "headline": "Want your ad here?",
+      "body": "Make one and post it in #fake-ads. We will run it.",
+      "tag": "still no real money involved",
+      "accent": "#ffa81e",
+      "weight": 2
+    }
+  ]
+}

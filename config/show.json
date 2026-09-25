@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Run-of-show templates. Edit freely between broadcasts; a race copies its",
+    "rundown when the show starts, so edits mid-show won't disturb a live one.",
+    "",
+    "Each segment:",
+    "  name     what the casters and the overlay call it",
+    "  minutes  planned length; the overlay counts down and shows overruns",
+    "  kind     'game' for the race itself, which switches the overlay to",
+    "           turn count and live tallies. Anything else is talk.",
+    "  action   optional. 'open' opens betting when the segment starts,",
+    "           'lock' locks it. Move 'lock' later if you want betting to",
+    "           stay open through the first few turns."
+  ],
+
+  "templates": {
+    "premiere": [
+      {"name": "Welcome and the rules",       "minutes": 15, "action": "open"},
+      {"name": "How the season works",        "minutes": 5},
+      {"name": "The race",                    "minutes": 90, "kind": "game", "action": "lock"},
+      {"name": "Results and the Discord",     "minutes": 10}
+    ],
+
+    "standard": [
+      {"name": "Pre-show",                    "minutes": 10, "action": "open"},
+      {"name": "Picks and predictions",       "minutes": 10},
+      {"name": "The race",                    "minutes": 90, "kind": "game", "action": "lock"},
+      {"name": "Post-game",                   "minutes": 10}
+    ]
+  }
+}

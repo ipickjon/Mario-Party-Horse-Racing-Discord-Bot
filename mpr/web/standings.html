@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Standings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --enamel: #0c1a13;
+    --panel:  #14291e;
+    --rule:   #2c4a36;
+    --lamp:   #ffa81e;
+    --paper:  #efede3;
+    --muted:  #7d9a86;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: transparent;
+    font-family: "Barlow Condensed", "Oswald", "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 24px;
+  }
+  .panel {
+    width: 560px;
+    background: var(--enamel);
+    border: 2px solid var(--rule);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px #000a, 0 18px 44px #0009;
+  }
+  .panel[hidden] { display: none; }
+  .head {
+    background: var(--panel);
+    border-bottom: 2px solid var(--rule);
+    padding: 16px 24px 14px;
+  }
+  .head h1 {
+    margin: 0;
+    font-size: 38px; font-weight: 700; line-height: 1;
+    color: var(--paper);
+  }
+  .head p { margin: 6px 0 0; font-size: 18px; color: var(--muted); }
+  ol { list-style: none; margin: 0; padding: 6px 0; counter-reset: seat; }
+  li {
+    counter-increment: seat;
+    display: grid;
+    grid-template-columns: 54px 1fr auto;
+    align-items: baseline;
+    gap: 14px;
+    padding: 10px 24px;
+    border-bottom: 1px solid #1b3225;
+  }
+  li:last-child { border-bottom: 0; }
+  li::before {
+    content: counter(seat);
+    font-size: 24px; font-weight: 500;
+    color: var(--muted); text-align: right;
+  }
+  li:nth-child(-n+3)::before { color: var(--lamp); }
+  .who { font-size: 29px; font-weight: 600; color: var(--paper); }
+  .coins {
+    font-size: 29px; font-weight: 700; color: var(--lamp);
+    text-shadow: 0 0 14px #ffa81e4d;
+  }
+  .rail {
+    padding: 9px 24px;
+    background: var(--panel);
+    border-top: 2px solid var(--rule);
+    font-size: 18px; font-weight: 500; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+<div class="panel" id="panel" hidden>
+  <div class="head">
+    <h1>Standings</h1>
+    <p id="sub"></p>
+  </div>
+  <ol id="rows"></ol>
+  <div class="rail">Fake points only. Nothing on this board is real money.</div>
+</div>
+
+<script>
+const fmt = n => n.toLocaleString("en-US");
+
+async function poll() {
+  let data;
+  try {
+    data = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json();
+  } catch { return; }
+
+  const panel = document.getElementById("panel");
+  if (!data.race || !data.standings.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const head = document.querySelector(".head h1");
+  head.textContent = data.season ? data.season.name : "Standings";
+  document.getElementById("sub").textContent = data.season
+    ? `${data.race.week} — broadcast ${data.season.done + 1} of ${data.season.length}`
+    : `${data.race.week} — ${data.race.game}`;
+
+  const rows = document.getElementById("rows");
+  rows.innerHTML = "";
+  for (const s of data.standings) {
+    const li = document.createElement("li");
+    const who = document.createElement("div");
+    who.className = "who";
+    who.textContent = s.name;
+    const coins = document.createElement("div");
+    coins.className = "coins";
+    coins.textContent = fmt(s.balance);
+    li.append(who, coins);
+    rows.appendChild(li);
+  }
+}
+
+setInterval(poll, 4000);
+poll();
+</script>
+</body>
+</html>
