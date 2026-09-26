@@ -28,7 +28,7 @@ class Response:
         self.outer.sent.append({"content": content, "embed": embed, "view": view,
                                 "ephemeral": ephemeral, "file": file})
 
-    async def edit_message(self, *, content=None, embed=None, view=None):
+    async def edit_message(self, *, content=None, embed=None, view=None, attachments=None):
         self._done = True
         self.outer.edits.append({"content": content, "embed": embed, "view": view})
 
@@ -79,8 +79,14 @@ class Interaction:
 
 async def build_bot():
     bot = B.HorseRace()
-    for cog in (B.Betting(bot), B.Broadcast(bot), B.Show(bot), B.Bonus(bot)):
-        await bot.add_cog(cog)
+    for cog in B.COGS:
+        await bot.add_cog(cog(bot))
+    bot.install_mode("party")
+    bot.syncs = []
+
+    async def record_sync():
+        bot.syncs.append(bot.mode)
+    bot.sync_commands = record_sync
     bot.tree.on_error = B.on_error
     return bot
 

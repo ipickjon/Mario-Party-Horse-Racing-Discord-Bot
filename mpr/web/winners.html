@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Winners</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --enamel: #0c1a13; --panel: #14291e; --rule: #2c4a36;
+    --lamp: #ffa81e; --lamp-dim: #59400f;
+    --paper: #efede3; --muted: #7d9a86; --warn: #ff6b4a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; background: transparent;
+    font-family: "Barlow Condensed", "Oswald", "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 40px;
+  }
+  .card {
+    width: 1360px; background: var(--enamel);
+    border: 2px solid var(--rule); border-top: 5px solid var(--lamp);
+    border-radius: 3px; box-shadow: 0 0 0 1px #000a, 0 24px 60px #000b;
+    overflow: hidden;
+  }
+  .card[hidden] { display: none; }
+
+  .head { padding: 26px 40px 20px; background: var(--panel); border-bottom: 2px solid var(--rule); }
+  .kicker { font-size: 24px; font-weight: 500; color: var(--muted); }
+  h1 { margin: 2px 0 0; font-size: 76px; font-weight: 700; line-height: .95; color: var(--paper); }
+
+  .order { display: flex; gap: 18px; padding: 22px 40px; border-bottom: 1px solid #1b3225; }
+  .place {
+    flex: 1; display: grid; grid-template-columns: auto 44px 1fr;
+    align-items: center; gap: 12px;
+    padding: 12px 16px; background: #10231a; border: 1px solid var(--rule); border-radius: 2px;
+  }
+  .place .ord { font-size: 26px; font-weight: 700; color: var(--muted); min-width: 44px; }
+  .place.first .ord { color: var(--lamp); }
+  .cloth {
+    width: 44px; height: 44px; display: grid; place-items: center; border-radius: 2px;
+    font-size: 26px; font-weight: 700; color: var(--enamel); box-shadow: inset 0 0 0 1px #0006;
+  }
+  .place .nm {
+    font-size: 36px; font-weight: 600; color: var(--paper);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .winners { padding: 16px 40px 8px; }
+  .label { font-size: 22px; font-weight: 600; color: var(--muted); margin: 6px 0 8px; }
+  .row {
+    display: grid; grid-template-columns: 70px 1fr auto 220px;
+    align-items: baseline; gap: 20px;
+    padding: 12px 0; border-top: 1px solid #1b3225;
+    opacity: 0; transform: translateX(-24px);
+  }
+  .row.in { opacity: 1; transform: none; transition: opacity 420ms, transform 420ms cubic-bezier(.2,.8,.2,1); }
+  .rank { font-size: 40px; font-weight: 700; color: var(--muted); }
+  .who { font-size: 46px; font-weight: 700; color: var(--paper); line-height: 1; }
+  .flow { font-size: 24px; font-weight: 500; color: var(--muted); }
+  .profit {
+    text-align: right; font-size: 56px; font-weight: 700; line-height: 1;
+    color: var(--lamp); text-shadow: 0 0 18px #ffa81e55;
+  }
+  .row.top .rank { color: var(--lamp); }
+  .row.top .who { font-size: 56px; }
+  .row.top .profit { font-size: 68px; }
+  .quiet { font-size: 34px; font-weight: 600; color: var(--muted); padding: 18px 0 22px; }
+
+  .perfect {
+    margin: 10px 40px 22px; padding: 16px 22px;
+    background: var(--lamp); color: var(--enamel); border-radius: 2px;
+    display: flex; align-items: baseline; gap: 18px;
+    opacity: 0;
+  }
+  .perfect[hidden] { display: none; }
+  .perfect.in { opacity: 1; animation: flick 900ms steps(1, end); }
+  .perfect b { font-size: 44px; font-weight: 700; letter-spacing: .02em; }
+  .perfect span { font-size: 34px; font-weight: 600; }
+  @keyframes flick { 0%, 100% { opacity: 1 } 15%, 45% { opacity: .15 } 30%, 60% { opacity: 1 } }
+
+  .rail {
+    display: flex; justify-content: space-between; gap: 24px;
+    padding: 12px 40px; background: var(--panel); border-top: 2px solid var(--rule);
+    font-size: 22px; font-weight: 500; color: var(--muted);
+  }
+  .rail b { color: var(--paper); font-weight: 600; }
+  .rail span:last-child { white-space: nowrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row, .row.in { opacity: 1; transform: none; transition: none; }
+    .perfect, .perfect.in { opacity: 1; animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="card" id="card" hidden>
+  <div class="head">
+    <div class="kicker" id="kicker"></div>
+    <h1>Results</h1>
+  </div>
+  <div class="order" id="order"></div>
+  <div class="winners">
+    <div class="label" id="winLabel">Biggest winners</div>
+    <div id="rows"></div>
+  </div>
+  <div class="perfect" id="perfect" hidden><b>PERFECT CARD</b><span id="perfectWho"></span></div>
+  <div class="rail">
+    <span id="props"></span>
+    <span>Fake points only. Nothing here is real money.</span>
+  </div>
+</div>
+
+<script>
+const fmt = n => n.toLocaleString("en-US");
+const esc = t => String(t).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const ordinal = n => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ({1: "st", 2: "nd", 3: "rd"}[n % 10] || "th"));
+const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let shownFor = null, timers = [];
+
+async function poll() {
+  let d;
+  try { d = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json(); }
+  catch { return; }
+  const card = document.getElementById("card");
+  if (!d.results) { card.hidden = true; shownFor = null; return; }
+  if (d.results.race_id !== shownFor) {       // a newly finished race: run the reveal
+    shownFor = d.results.race_id;
+    reveal(d);
+  }
+}
+
+function later(ms, fn) { timers.push(setTimeout(fn, calm ? 0 : ms)); }
+
+function countUp(el, value, ms) {
+  if (calm) { el.textContent = "+" + fmt(value); return; }
+  const start = performance.now();
+  const step = t => {
+    const k = Math.min(1, (t - start) / ms);
+    el.textContent = "+" + fmt(Math.round(value * (1 - Math.pow(1 - k, 3))));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function reveal(d) {
+  timers.forEach(clearTimeout); timers = [];
+  const res = d.results, card = document.getElementById("card");
+  card.hidden = false;
+  document.getElementById("kicker").textContent =
+    `${res.week} — ${res.game}` + (res.players ? `, ${res.players} players` : "");
+
+  const meta = Object.fromEntries((d.entrants || []).map(e => [e.name, e]));
+  const order = document.getElementById("order");
+  order.innerHTML = "";
+  const shown = (res.finish || []).slice(0, 4);
+  order.hidden = !shown.length;
+  shown.forEach((name, i) => {
+    const e = meta[name] || { color: "#5c7a68", slot: "" };
+    const el = document.createElement("div");
+    el.className = "place" + (i === 0 ? " first" : "");
+    el.innerHTML = `<span class="ord">${ordinal(i + 1)}</span>` +
+                   `<span class="cloth" style="background:${e.color}">${e.slot}</span><span class="nm"></span>`;
+    el.querySelector(".nm").textContent = name;
+    order.appendChild(el);
+  });
+
+  const rows = document.getElementById("rows");
+  rows.innerHTML = "";
+  const list = res.winners || [];
+  document.getElementById("winLabel").hidden = !list.length;
+  if (!list.length) {
+    rows.innerHTML = `<div class="quiet">Nobody came out ahead tonight. The house thanks you.</div>`;
+  }
+  const built = list.map((w, i) => {
+    const row = document.createElement("div");
+    row.className = "row" + (i === 0 ? " top" : "");
+    row.innerHTML = `<span class="rank">${i + 1}</span>` +
+                    `<span><div class="who"></div><div class="flow">${fmt(w.staked)} in, ${fmt(w.returned)} back</div></span>` +
+                    `<span></span><span class="profit">+0</span>`;
+    row.querySelector(".who").textContent = w.name;
+    rows.appendChild(row);
+    return row;
+  });
+  // Count down from the bottom of the list to first place.
+  const firstAt = 1400, gap = 1300;
+  [...built].reverse().forEach((row, k) => {
+    const i = built.length - 1 - k;
+    later(firstAt + k * gap, () => {
+      row.classList.add("in");
+      countUp(row.querySelector(".profit"), list[i].profit, i === 0 ? 1400 : 900);
+    });
+  });
+
+  const perfect = document.getElementById("perfect");
+  perfect.classList.remove("in");
+  perfect.hidden = !(res.perfect && res.perfect.length);
+  if (!perfect.hidden) {
+    document.getElementById("perfectWho").textContent =
+      `${res.perfect.join(", ")} called the whole order`;
+    later(firstAt + built.length * gap + 600, () => perfect.classList.add("in"));
+  }
+
+  const props = (res.props || []).map(p => `${esc(p.label)}: <b>${esc(p.winner || "tie, refunded")}</b>`);
+  document.getElementById("props").innerHTML = props.join("  &nbsp;|&nbsp;  ");
+}
+
+setInterval(poll, 3000);
+poll();
+</script>
+</body>
+</html>

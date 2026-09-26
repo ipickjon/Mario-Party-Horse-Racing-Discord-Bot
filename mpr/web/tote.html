@@ -73,7 +73,7 @@
   .runners { padding: 7px 0; }
   .runner {
     display: grid;
-    grid-template-columns: 38px 224px 112px 1fr 138px;
+    grid-template-columns: 38px 190px 128px 112px 1fr 126px;
     align-items: center; gap: 0 20px;
     padding: 8px 26px 8px 20px;
     border-bottom: 1px solid #1b3225;
@@ -88,7 +88,15 @@
   .name {
     font-size: 34px; font-weight: 600; letter-spacing: .005em;
     color: var(--paper); line-height: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* form guide: recent finishes, latest first; wins lit */
+  .form {
+    display: flex; gap: 7px; align-items: baseline;
+    font-size: 21px; font-weight: 600; color: var(--muted);
+  }
+  .form .w { color: var(--lamp); }
+  .form .debut { font-size: 16px; font-weight: 500; letter-spacing: .02em; }
   .share {
     font-size: 38px; font-weight: 700; line-height: 1;
     color: var(--lamp); text-align: right;
@@ -180,6 +188,11 @@ function liveMarkets() {
   return open.length ? open : state.markets;
 }
 
+function formHtml(recent) {
+  if (!recent || !recent.length) return `<span class="debut">debut</span>`;
+  return recent.map(p => `<span class="${p === 1 ? "w" : ""}">${p}</span>`).join("");
+}
+
 function render() {
   const board = document.getElementById("board");
   const markets = liveMarkets();
@@ -239,6 +252,7 @@ function render() {
     row.innerHTML = `
       <div class="silk" style="background:${r.color}">${r.slot}</div>
       <div class="name"></div>
+      <div class="form">${formHtml(r.form)}</div>
       <div class="share ${r.staked ? "" : "cold"} ${moved ? "flick" : ""}"></div>
       <div class="bar"><span style="width:${(r.staked / top) * 100}%"></span></div>
       <div class="staked">${fmt(r.staked)} <em>in</em></div>`;

@@ -97,7 +97,37 @@
   .next b { color: var(--paper); font-weight: 600; }
   .next[hidden] { display: none; }
 
+  /* name callouts: big bets and all-ins */
+  .shout {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 18px 8px;
+    background: var(--lamp); color: var(--enamel);
+    border-top: 2px solid #b8740f;
+  }
+  .shout[hidden] { display: none; }
+  .shout .tag {
+    flex: none; padding: 2px 8px 1px; border-radius: 2px;
+    background: var(--enamel); color: var(--lamp);
+    font-size: 16px; font-weight: 700; letter-spacing: .03em;
+  }
+  .shout .txt {
+    font-size: 22px; font-weight: 600; line-height: 1.1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .shout .who { font-weight: 700; }
+  .shout.allin { background: #ff6b4a; border-top-color: #b8452f; }
+  .shout.allin .tag { color: #ff6b4a; }
+  .shout.pop { animation: pop 5.8s ease both; }
+  .shout.allin.pop { animation: pop 5.8s ease both, flash 700ms steps(1, end) 2; }
+  @keyframes pop {
+    0% { opacity: 0; transform: translateY(-6px); }
+    6%, 92% { opacity: 1; transform: none; }
+    100% { opacity: 0; }
+  }
+  @keyframes flash { 50% { filter: brightness(1.35); } }
+
   @media (prefers-reduced-motion: reduce) {
+    .shout.pop, .shout.allin.pop { animation: none; }
     td.n.bump { animation: none; }
     .track span { transition: none; }
   }
@@ -119,16 +149,49 @@
     <tbody id="rows"></tbody>
   </table>
   <div class="next" id="next" hidden></div>
+  <div class="shout" id="shout" hidden>
+    <span class="tag" id="shoutTag"></span>
+    <span class="txt"><span class="who" id="shoutWho"></span>: <span id="shoutWhat"></span></span>
+  </div>
 </div>
 
 <script>
 let data = null, skew = 0, last = {};
+let seenShouts = new Set(), shoutQueue = [], shouting = false, firstShoutPoll = true;
+
+function takeShouts(list) {
+  for (const c of list || []) {
+    if (seenShouts.has(c.id)) continue;
+    seenShouts.add(c.id);
+    // After OBS reloads the page, don't replay a backlog of old callouts.
+    if (firstShoutPoll && c.age > 15) continue;
+    shoutQueue.push(c);
+  }
+  firstShoutPoll = false;
+  if (!shouting) nextShout();
+}
+
+function nextShout() {
+  const el = document.getElementById("shout");
+  const c = shoutQueue.shift();
+  if (!c) { shouting = false; el.hidden = true; return; }
+  shouting = true;
+  el.hidden = false;
+  el.classList.toggle("allin", c.all_in);
+  document.getElementById("shoutTag").textContent = c.all_in ? "ALL IN" : "BIG BET";
+  document.getElementById("shoutWho").textContent = c.who;
+  document.getElementById("shoutWhat").textContent =
+    `${c.amount.toLocaleString("en-US")} on ${c.what}`;
+  el.classList.remove("pop"); void el.offsetWidth; el.classList.add("pop");
+  setTimeout(nextShout, 6000);
+}
 
 async function poll() {
   try {
     const d = await (await fetch("/state.json" + location.search, { cache: "no-store" })).json();
     skew = d.now * 1000 - Date.now();
     data = d.race ? d : null;
+    if (data) takeShouts(d.callouts);
   } catch { /* keep the last good state on screen */ }
   render();
 }
@@ -159,7 +222,8 @@ function render() {
 
   if (isGame) {
     what.textContent = seg ? seg.name : "The race";
-    big.innerHTML = `${r.turn}<small> / ${r.total_turns}</small>`;
+    const laps = r.mode === "kart" ? " laps" : "";
+    big.innerHTML = `${r.turn}<small> / ${r.total_turns}${laps}</small>`;
     fill.style.width = (r.turn / r.total_turns * 100) + "%";
   } else if (seg) {
     what.textContent = seg.name;
@@ -179,10 +243,13 @@ function render() {
   }
 
   const remaining = r.total_turns - r.turn;
-  document.getElementById("flag").hidden = !(isGame && r.turn > 0 && remaining < 5);
+  document.getElementById("flag").hidden =
+    !(r.mode !== "kart" && isGame && r.turn > 0 && remaining < 5);
 
   const table = document.getElementById("table");
-  table.hidden = !(isGame || data.tallies.some(t => t.qtiles || t.minigames));
+  // Kart has no ? tiles or minigames, so there's nothing to count.
+  table.hidden = r.mode === "kart" ||
+    !(isGame || data.tallies.some(t => t.qtiles || t.minigames));
   const rows = document.getElementById("rows");
   rows.innerHTML = "";
   for (const t of data.tallies) {

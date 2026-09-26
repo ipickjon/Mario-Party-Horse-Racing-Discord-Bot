@@ -135,7 +135,7 @@ def test_missing_or_bad_token_explains_the_fix(monkeypatch):
 def test_backup_is_host_only_and_is_a_real_copy_of_the_season(fresh_db):
     async def go():
         bot = await build_bot()
-        await run(bot, "race create", Interaction(user_id=10, staff=True), week="W1",
+        await run(bot, "race create", Interaction(user_id=10, staff=True), mode="Mario Party", week="W1",
                   runners="Mario, Luigi, Peach, Yoshi")
         db.wallet(20, "ana")
         crew = await run(bot, "backup", Interaction(user_id=10, staff=True))

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -45,6 +46,16 @@ TALLIED_PROPS = ("qtiles", "minigames")
 DEFAULT_TURNS = 35
 PALETTE = ["#e5453a", "#3fae5a", "#f4a43c", "#5b8dd9", "#b36ad6", "#e8d44d",
            "#4cc3c9", "#f07fb0", "#9c7a4f", "#8fd35f", "#6b7fe3", "#d9d9d9"]
+
+
+# Game modes. The mode decides the field size, whether the Mario Party props
+# run, and which version of /bet and /race result the server sees.
+MODES = {
+    "party": {"label": "Mario Party", "runners": (4, 4), "props": True,
+              "turns": 35, "unit": "turn"},
+    "kart": {"label": "Mario Kart", "runners": (2, 12), "props": False,
+             "turns": 3, "unit": "lap"},
+}
 
 
 def ordinal(n: int) -> str:
@@ -98,7 +109,8 @@ CREATE TABLE IF NOT EXISTS races (
     total_turns     INTEGER NOT NULL DEFAULT 35,
     rundown         TEXT,
     segment         INTEGER NOT NULL DEFAULT -1,
-    segment_started REAL
+    segment_started REAL,
+    mode            TEXT    NOT NULL DEFAULT 'party'
 );
 
 CREATE TABLE IF NOT EXISTS entrants (
@@ -149,7 +161,30 @@ CREATE TABLE IF NOT EXISTS wallets (
     returned     INTEGER NOT NULL DEFAULT 0,
     last_stipend TEXT    NOT NULL DEFAULT '',
     featured     INTEGER NOT NULL DEFAULT 0,
-    on_air_name  TEXT    NOT NULL DEFAULT ''
+    on_air_name  TEXT    NOT NULL DEFAULT '',
+    adjusted     INTEGER NOT NULL DEFAULT 0
+);
+
+-- Big bets and all-ins, announced on the scorebug and in Discord.
+CREATE TABLE IF NOT EXISTS callouts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    race_id    INTEGER NOT NULL,
+    bet_id     INTEGER NOT NULL,
+    who        TEXT    NOT NULL,
+    amount     INTEGER NOT NULL,
+    what       TEXT    NOT NULL,
+    all_in     INTEGER NOT NULL DEFAULT 0,
+    created_at REAL    NOT NULL
+);
+
+-- Every /gift, so the crew can always see who gave what and why.
+CREATE TABLE IF NOT EXISTS gifts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    giver_id   INTEGER NOT NULL,
+    amount     INTEGER NOT NULL,
+    reason     TEXT    NOT NULL DEFAULT '',
+    created_at REAL    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tallies (
@@ -161,6 +196,31 @@ CREATE TABLE IF NOT EXISTS tallies (
 );
 
 -- Every tally press and turn change, so a misclick mid-show can be undone.
+-- The ad rotation. Crew ads go straight in as 'live'; viewer submissions
+-- wait as 'pending' until the crew approves them. Uploaded images are stored
+-- in the row itself, so /backup carries them and they never go stale.
+CREATE TABLE IF NOT EXISTS ads (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    headline       TEXT    NOT NULL,
+    body           TEXT    NOT NULL DEFAULT '',
+    tag            TEXT    NOT NULL DEFAULT '',
+    accent         TEXT    NOT NULL DEFAULT '#ffa81e',
+    weight         INTEGER NOT NULL DEFAULT 1,
+    image_file     TEXT,
+    image_blob     BLOB,
+    image_type     TEXT,
+    status         TEXT    NOT NULL DEFAULT 'live',
+    submitted_by   INTEGER,
+    submitted_name TEXT    NOT NULL DEFAULT '',
+    created_at     REAL    NOT NULL,
+    reviewed_by    INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     race_id    INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
@@ -182,6 +242,7 @@ _MIGRATIONS = {
         "rundown": "TEXT",
         "segment": "INTEGER NOT NULL DEFAULT -1",
         "segment_started": "REAL",
+        "mode": "TEXT NOT NULL DEFAULT 'party'",
     },
     "markets": {
         "label": "TEXT", "options": "TEXT", "multiplier": "INTEGER",
@@ -192,6 +253,7 @@ _MIGRATIONS = {
     "wallets": {
         "featured": "INTEGER NOT NULL DEFAULT 0",
         "on_air_name": "TEXT NOT NULL DEFAULT ''",
+        "adjusted": "INTEGER NOT NULL DEFAULT 0",
     },
 }
 
@@ -237,6 +299,103 @@ def init():
                 if col not in have:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         conn.executescript(SCHEMA)
+    _seed_ads_once()
+
+
+# -------------------------------------------------------------------- ads
+
+ADS_FILE = ROOT / "config" / "ads.json"
+
+
+def _seed_ads_once():
+    """Bring config/ads.json into the database the first time only. After
+    that the rotation is managed with /ad commands, and removing every ad
+    doesn't bring the samples back on the next restart."""
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'ads_seeded'").fetchone():
+            return
+        try:
+            slots = json.loads(ADS_FILE.read_text()).get("slots", [])
+        except (OSError, ValueError):
+            slots = []
+        for slot in slots:
+            if not (slot.get("headline") or slot.get("image")):
+                continue
+            conn.execute(
+                """INSERT INTO ads (headline, body, tag, accent, weight, image_file,
+                                    status, submitted_name, created_at)
+                   VALUES (?,?,?,?,?,?, 'live', 'config/ads.json', ?)""",
+                (slot.get("headline") or slot.get("image"), slot.get("body", ""),
+                 slot.get("tag", ""), slot.get("accent", "#ffa81e"),
+                 max(1, min(10, int(slot.get("weight", 1)))), slot.get("image"), time.time()),
+            )
+        conn.execute("INSERT INTO meta (key, value) VALUES ('ads_seeded', '1')")
+
+
+def ad_dwell_seconds() -> int:
+    try:
+        return max(4, int(json.loads(ADS_FILE.read_text()).get("dwell_seconds", 12)))
+    except (OSError, ValueError, TypeError):
+        return 12
+
+
+def add_ad(*, headline: str, body: str, tag: str, accent: str, weight: int, status: str,
+           submitted_by: int | None, submitted_name: str,
+           image_blob: bytes | None = None, image_type: str | None = None) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO ads (headline, body, tag, accent, weight, image_blob, image_type,
+                                status, submitted_by, submitted_name, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (headline, body, tag, accent, weight, image_blob, image_type, status,
+             submitted_by, submitted_name, time.time()),
+        )
+        return cur.lastrowid
+
+
+_AD_COLUMNS = ("id, headline, body, tag, accent, weight, image_file, image_type, status, "
+               "submitted_by, submitted_name, created_at, image_blob IS NOT NULL AS has_upload")
+
+
+def ad(ad_id: int) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute(f"SELECT {_AD_COLUMNS} FROM ads WHERE id = ?", (ad_id,)).fetchone()
+
+
+def ads(status: str | None = None, submitted_by: int | None = None) -> list[sqlite3.Row]:
+    sql, args = f"SELECT {_AD_COLUMNS} FROM ads WHERE 1=1", []
+    if status:
+        sql += " AND status = ?"
+        args.append(status)
+    if submitted_by is not None:
+        sql += " AND submitted_by = ?"
+        args.append(submitted_by)
+    with connect() as conn:
+        return conn.execute(sql + " ORDER BY id", args).fetchall()
+
+
+def ad_image(ad_id: int) -> tuple[bytes, str] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT image_blob, image_type FROM ads WHERE id = ?", (ad_id,)
+        ).fetchone()
+    if row is None or row["image_blob"] is None:
+        return None
+    return bytes(row["image_blob"]), row["image_type"]
+
+
+def approve_ad(ad_id: int, reviewer: int) -> bool:
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE ads SET status = 'live', reviewed_by = ? WHERE id = ? AND status = 'pending'",
+            (reviewer, ad_id),
+        )
+        return cur.rowcount == 1
+
+
+def remove_ad(ad_id: int) -> bool:
+    with connect() as conn:
+        return conn.execute("DELETE FROM ads WHERE id = ?", (ad_id,)).rowcount == 1
 
 
 # ---------------------------------------------------------------- wallets
@@ -305,6 +464,43 @@ def featured_users() -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def gift(user_id: int, display_name: str, amount: int, giver_id: int,
+         reason: str = "") -> tuple[int, int]:
+    """Give (or, with a negative amount, take back) points. A balance never
+    goes below zero. Returns (the change actually made, the new balance)."""
+    wallet(user_id, display_name)
+    with connect() as conn:
+        balance = conn.execute(
+            "SELECT balance FROM wallets WHERE user_id = ?", (user_id,)
+        ).fetchone()["balance"]
+        change = max(amount, -balance)
+        if change == 0:
+            return 0, balance          # nothing happened, so nothing to log
+        conn.execute(
+            "UPDATE wallets SET balance = balance + ?, adjusted = adjusted + ? WHERE user_id = ?",
+            (change, change, user_id),
+        )
+        conn.execute(
+            """INSERT INTO gifts (user_id, giver_id, amount, reason, created_at)
+               VALUES (?,?,?,?,?)""",
+            (user_id, giver_id, change, reason, time.time()),
+        )
+        return change, balance + change
+
+
+def rank_of(user_id: int) -> tuple[int, int]:
+    """(place, number of players). Tied balances share a place."""
+    with connect() as conn:
+        mine = conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (user_id,)).fetchone()
+        total = conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0]
+        if mine is None:
+            return total + 1, total + 1
+        ahead = conn.execute(
+            "SELECT COUNT(*) FROM wallets WHERE balance > ?", (mine["balance"],)
+        ).fetchone()[0]
+        return ahead + 1, total
+
+
 def leaderboard(limit: int = 10) -> list[sqlite3.Row]:
     with connect() as conn:
         return conn.execute(
@@ -353,7 +549,8 @@ def start_season(guild_id: int, name: str) -> dict:
                 (time.time(), closing["id"]),
             )
             conn.execute(
-                "UPDATE wallets SET balance = ?, staked = 0, returned = 0, last_stipend = ''",
+                "UPDATE wallets SET balance = ?, staked = 0, returned = 0, adjusted = 0, "
+                "last_stipend = ''",
                 (economy.STARTING_BALANCE,),
             )
         champions = [dict(r) for r in standings[:3]]
@@ -383,12 +580,17 @@ def hall_of_fame(guild_id: int, top: int = 3) -> list[dict]:
 
 def create_race(
     guild_id: int, week_label: str, game: str, names: list[str],
-    total_turns: int = DEFAULT_TURNS, props: bool = True,
+    total_turns: int | None = None, props: bool | None = None, mode: str = "party",
 ) -> int:
-    """names is the field in slot order, 2 to 12 runners. props=False skips
-    the Mario Party side bets, for a game like Mario Kart where they don't fit."""
-    if not economy.MIN_RUNNERS <= len(names) <= economy.MAX_RUNNERS:
+    """names is the field in slot order. The mode sets the allowed field size
+    and whether the Mario Party props run, unless props is given."""
+    low, high = MODES[mode]["runners"]
+    if not low <= len(names) <= high:
         raise ValueError("field size")
+    if props is None:
+        props = MODES[mode]["props"]
+    if total_turns is None:
+        total_turns = MODES[mode]["turns"]
     with connect() as conn:
         season = conn.execute(
             """SELECT id FROM seasons WHERE guild_id = ? AND status = 'running'
@@ -396,10 +598,11 @@ def create_race(
             (guild_id,),
         ).fetchone()
         cur = conn.execute(
-            """INSERT INTO races (guild_id, season_id, week_label, game, created_at, total_turns)
-               VALUES (?,?,?,?,?,?)""",
+            """INSERT INTO races (guild_id, season_id, week_label, game, created_at,
+                                  total_turns, mode)
+               VALUES (?,?,?,?,?,?,?)""",
             (guild_id, season["id"] if season else None, week_label, game,
-             time.time(), total_turns),
+             time.time(), total_turns, mode),
         )
         race_id = cur.lastrowid
         for slot, name in enumerate(names, start=1):
@@ -545,13 +748,52 @@ def place_bet(
         if not ok:
             return False, reason
         stored = json.dumps(selection) if m["kind"] == "slate" else selection
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO bets (race_id, market_id, user_id, selection, amount, placed_at)
                VALUES (?,?,?,?,?,?)""",
             (race_id, market_id, user_id, stored, amount, now),
         )
         adjust_balance(conn, user_id, -amount, staked=amount)
-        return True, ""
+        kind = economy.callout_kind(balance, amount)
+        if kind is None:
+            return True, ""
+        # A big bet or an all-in: remember it for the scorebug, and hand the
+        # announcement back so the bot can post it in the channel.
+        who = conn.execute("SELECT display_name FROM wallets WHERE user_id = ?",
+                           (user_id,)).fetchone()["display_name"] or "Someone"
+        what = _callout_subject(m, selection)
+        conn.execute(
+            """INSERT INTO callouts (race_id, bet_id, who, amount, what, all_in, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (race_id, cur.lastrowid, who, amount, what, kind == "allin", now),
+        )
+        return True, callout_text(who, amount, what, kind == "allin")
+
+
+def _callout_subject(m, selection) -> str:
+    if m["kind"] == "slate":
+        return f"{selection[0]} to win"
+    if m["kind"] == "prop":
+        return f"{selection} for {label_of(m)[0].lower()}{label_of(m)[1:]}"
+    return f"{selection} on the bonus"
+
+
+def callout_text(who: str, amount: int, what: str, all_in: bool) -> str:
+    if all_in:
+        return f"{who} just went ALL IN: {amount:,} on {what}!"
+    return f"{who} just put {amount:,} on {what}!"
+
+
+def recent_callouts(race_id: int, seconds: int = 90) -> list[dict]:
+    now = time.time()
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT id, who, amount, what, all_in, created_at FROM callouts
+                WHERE race_id = ? AND created_at >= ? ORDER BY id""",
+            (race_id, now - seconds),
+        ).fetchall()
+    return [{"id": r["id"], "who": r["who"], "amount": r["amount"], "what": r["what"],
+             "all_in": bool(r["all_in"]), "age": round(now - r["created_at"], 1)} for r in rows]
 
 
 def check_order(race_id: int, guess: list[str]) -> str:
@@ -573,6 +815,56 @@ def place_slate(race_id: int, user_id: int, guess: list[str], amount: int) -> tu
     if problem:
         return False, problem
     return place_bet(race_id, slate_market(race_id)["id"], user_id, guess, amount)
+
+
+_BET_WITH_MARKET = """
+    SELECT b.*, m.kind, m.key, m.label, m.status AS market_status,
+           m.result AS market_result, m.closes_at AS market_closes_at
+      FROM bets b JOIN markets m ON m.id = b.market_id"""
+
+
+def _still_open(row, now: float) -> bool:
+    return (row["market_status"] == "open" and row["market_result"] is None
+            and (row["market_closes_at"] is None or now < row["market_closes_at"]))
+
+
+def _describe(row) -> dict:
+    d = dict(row)
+    d["selection"] = _decode(row["kind"], row["selection"])
+    d["pick_text"] = " > ".join(d["selection"]) if row["kind"] == "slate" else d["selection"]
+    d["label"] = label_of(row)
+    return d
+
+
+def cancellable_bets(race_id: int, user_id: int) -> list[dict]:
+    """This person's bets that can still be taken back: unsettled, on a
+    market that's still taking bets."""
+    now = time.time()
+    with connect() as conn:
+        rows = conn.execute(
+            _BET_WITH_MARKET + " WHERE b.race_id = ? AND b.user_id = ? AND b.settled = 0 ORDER BY b.id",
+            (race_id, user_id),
+        ).fetchall()
+    return [_describe(r) for r in rows if _still_open(r, now)]
+
+
+def cancel_bet(user_id: int, bet_id: int) -> tuple[bool, str, dict | None]:
+    """Take a bet back and refund it in full, as if it was never placed.
+    Only the owner can, and only while its market is still taking bets."""
+    now = time.time()
+    with connect() as conn:
+        row = conn.execute(_BET_WITH_MARKET + " WHERE b.id = ? AND b.user_id = ?",
+                           (bet_id, user_id)).fetchone()
+        if row is None:
+            return False, "That isn't one of your bets.", None
+        if row["settled"]:
+            return False, "That bet's already been settled.", None
+        if not _still_open(row, now):
+            return False, "Betting's locked on that one, so it stays.", None
+        conn.execute("DELETE FROM bets WHERE id = ?", (bet_id,))
+        conn.execute("DELETE FROM callouts WHERE bet_id = ?", (bet_id,))
+        adjust_balance(conn, user_id, row["amount"], staked=-row["amount"])
+        return True, "", _describe(row)
 
 
 def market_totals(market_id: int) -> dict[str, int]:
@@ -763,7 +1055,109 @@ def finish_race(race_id: int) -> dict:
         key=lambda g: (-g["returned"], -g["right"]),
     )
     set_race_status(race_id, "settled")
+    auto_snapshot(r["week_label"])
     return {"finish": finish, "guesses": guesses}
+
+
+KEEP_SNAPSHOTS = 20
+
+
+def auto_snapshot(label: str) -> Path | None:
+    """Save a copy of the whole database next to it (on the Railway volume),
+    keeping the newest 20. Covers a bad night or a mistaken /reset without
+    anyone remembering to run /backup. Never allowed to break a finish."""
+    try:
+        folder = DB_PATH.parent / "backups"
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-")[:40] or "race"
+        dest = snapshot(folder / f"{time.strftime('%Y-%m-%d-%H%M%S')}-{safe}.db")
+        for old in sorted(folder.glob("*.db"))[:-KEEP_SNAPSHOTS]:
+            old.unlink(missing_ok=True)
+        return dest
+    except Exception:  # noqa: BLE001 - a failed backup must not stop the payout
+        return None
+
+
+TIE = "tie"
+
+
+def settle_night(race_id: int, order: list[str], coins: str | None = None) -> dict:
+    """The whole post-game in one go: settle the tallied props from the
+    panel counts, the coins prop, and every order guess, then close the night.
+
+    Everything is checked before anything is paid, so a refusal leaves the
+    race untouched and the crew can fix it and run it again."""
+    r = race(race_id)
+    if r is None or r["status"] == "settled":
+        return {"error": "That race is already finished."}
+    waiting = [label_of(m) for m in bonus_markets(race_id, include_settled=False)]
+    if waiting:
+        return {"error": "Settle the bonus questions first, with /bonus call or /bonus void: "
+                         + ", ".join(waiting)}
+    problem = check_order(race_id, order)
+    if problem:
+        return {"error": problem.replace("Guess the whole order", "Enter the whole order")}
+    coins_market = market(race_id, "prop", "coins")
+    needs_coins = coins_market is not None and coins_market["result"] is None
+    if needs_coins:
+        if not coins:
+            return {"error": "Fill in coins: who had the most coins when the race ended. "
+                             "Pick Tie if it was a tie."}
+        if coins.lower() != TIE and coins not in options_of(coins_market):
+            return {"error": f"{coins} isn't in this race."}
+
+    set_race_status(race_id, "locked")              # no late bets while paying out
+    props = autograde(race_id)
+    if needs_coins:
+        props.append(call_market_id(coins_market["id"],
+                                    None if coins.lower() == TIE else coins))
+    order_summary = settle_order(race_id, order)
+    closed = finish_race(race_id)
+    if "error" in closed:                           # a prop was left open by hand
+        return closed
+    return {"week": r["week_label"], "props": props, "order": order_summary, **closed}
+
+
+def night_results(race_id: int, top: int = 5) -> dict | None:
+    """What the winners reveal shows for a finished race: the final order,
+    the props, the night's biggest winners across every bet they made, and
+    anyone who called the whole order."""
+    r = race(race_id)
+    if r is None or r["status"] != "settled":
+        return None
+    slate = slate_market(race_id)
+    finish = None
+    if slate and slate["result"] and slate["result"] != "VOID":
+        finish = json.loads(slate["result"])
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT b.user_id, w.display_name, m.kind, b.selection, b.amount,
+                      COALESCE(b.payout, 0) AS payout
+                 FROM bets b JOIN markets m ON m.id = b.market_id
+                 LEFT JOIN wallets w ON w.user_id = b.user_id
+                WHERE b.race_id = ?""",
+            (race_id,),
+        ).fetchall()
+    people: dict[int, dict] = {}
+    perfect: list[str] = []
+    for x in rows:
+        who = people.setdefault(x["user_id"], {"name": x["display_name"] or "Someone",
+                                               "staked": 0, "returned": 0})
+        who["staked"] += x["amount"]
+        who["returned"] += x["payout"]
+        if (x["kind"] == "slate" and finish
+                and economy.positions_right(json.loads(x["selection"]), finish) == len(finish)
+                and who["name"] not in perfect):
+            perfect.append(who["name"])
+    winners = sorted((dict(p, profit=p["returned"] - p["staked"]) for p in people.values()
+                      if p["returned"] > p["staked"]),
+                     key=lambda p: (-p["profit"], p["name"]))[:top]
+    props = []
+    for m in markets(race_id, ("prop",)):
+        props.append({"label": label_of(m),
+                      "winner": None if m["result"] in (None, "VOID") else m["result"]})
+    return {"race_id": race_id, "week": r["week_label"], "game": r["game"], "finish": finish,
+            "winners": winners, "perfect": perfect, "props": props,
+            "players": len(people)}
 
 
 # ----------------------------------------------------------------- reset
@@ -771,8 +1165,57 @@ def finish_race(race_id: int) -> dict:
 
 def reset_economy(guild_id: int, name: str) -> dict:
     """/reset: archive the current table into the hall of fame, put every
-    wallet back to the starting balance, and open a new season under name."""
-    return start_season(guild_id, name)
+    wallet back to the starting balance, and open a new season under name.
+
+    Wallets are reset even when no season was running (say, points were only
+    ever gifted), because that's what the host was promised when confirming."""
+    out = start_season(guild_id, name)
+    if out["closed"] is None:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE wallets SET balance = ?, staked = 0, returned = 0, adjusted = 0, "
+                "last_stipend = ''",
+                (economy.STARTING_BALANCE,),
+            )
+    return out
+
+
+# ------------------------------------------------------------- form guide
+
+FORM_LENGTH = 5
+
+
+def form(names: list[str], mode: str, guild_id: int | None = None) -> dict[str, dict]:
+    """Each runner's record in past finished races of the same mode.
+
+    recent is their last few finishing places, latest first. Names match
+    ignoring capitals, so "mario" last week and "Mario" tonight are one
+    runner. Voided results don't count."""
+    wanted = {n.lower(): n for n in names}
+    out = {n: {"recent": [], "starts": 0, "wins": 0, "total": 0} for n in names}
+    sql = """SELECT m.result FROM markets m JOIN races r ON r.id = m.race_id
+              WHERE m.kind = 'slate' AND r.status = 'settled' AND r.mode = ?
+                AND m.result IS NOT NULL AND m.result != 'VOID'"""
+    args: list = [mode]
+    if guild_id:
+        sql += " AND r.guild_id = ?"
+        args.append(guild_id)
+    with connect() as conn:
+        rows = conn.execute(sql + " ORDER BY r.settled_at DESC, r.id DESC", args).fetchall()
+    for row in rows:
+        for place, name in enumerate(json.loads(row["result"]), start=1):
+            runner = wanted.get(name.lower())
+            if runner is None:
+                continue
+            rec = out[runner]
+            rec["starts"] += 1
+            rec["total"] += place
+            rec["wins"] += place == 1
+            if len(rec["recent"]) < FORM_LENGTH:
+                rec["recent"].append(place)
+    for rec in out.values():
+        rec["average"] = round(rec["total"] / rec["starts"], 1) if rec["starts"] else None
+    return out
 
 
 # ----------------------------------------------------------- bonus markets

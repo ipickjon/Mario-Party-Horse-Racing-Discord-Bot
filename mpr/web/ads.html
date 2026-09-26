@@ -122,8 +122,8 @@ function show() {
 
   const shot = document.getElementById("shot");
   const copy = document.getElementById("copy");
-  if (ad.image) {
-    shot.src = "/ads/img/" + ad.image + location.search;
+  if (ad.image_url) {
+    shot.src = ad.image_url + location.search;
     shot.hidden = false;
     copy.hidden = true;
   } else {

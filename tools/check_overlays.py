@@ -36,6 +36,12 @@ IGNORED = ("fonts.googleapis.com", "fonts.gstatic.com")
 def seed():
     db.init()
     db.start_season(42, "Season 1")
+    # two finished weeks, so the tote board has form to show
+    for week, finish in [("Week 1", ["Yoshi", "Mario", "Luigi", "Peach"]),
+                         ("Week 2", ["Mario", "Yoshi", "Peach", "Luigi"])]:
+        past = db.create_race(42, week, "Mario Party", finish)
+        db.set_race_status(past, "open")
+        db.settle_night(past, finish, "tie")
     rid = db.create_race(42, "Week 3", "Mario Party", ["Mario", "Luigi", "Peach", "Yoshi"])
     db.start_show(rid, "standard")
     for uid, name in [(1, "JaeAIK"), (2, "ana"), (3, "rob"), (4, "kim"), (5, "sam")]:
@@ -53,6 +59,26 @@ def seed():
     coins = db.market(rid, "prop", "coins")
     db.place_bet(rid, coins["id"], 1, "Peach", 20)
     return rid
+
+
+def banner_png(width=1170, height=170) -> bytes:
+    """A striped test banner, drawn without an image library."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    rows = b""
+    for y in range(height):
+        row = bytearray(b"\x00")
+        for x in range(width):
+            stripe = ((x + y) // 40) % 2
+            row += bytes((88, 101, 242) if stripe else (255, 168, 30))
+        rows += bytes(row)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
 def set_segment(rid, index, started_ago):
@@ -77,7 +103,7 @@ def main() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch()
 
-        def check(page_name, label, width, height, verify=None, shot=None):
+        def check(page_name, label, width, height, verify=None, shot=None, wait=2600):
             page = browser.new_page(viewport={"width": width, "height": height})
             errors = []
             page.on("pageerror", lambda e: errors.append(f"script error: {e}"))
@@ -85,7 +111,7 @@ def main() -> int:
                 h in (m.location or {}).get("url", "") or h in m.text for h in IGNORED)
                 and errors.append(f"console: {m.text}"))
             page.goto(f"{BASE}/{page_name}?key={os.environ['MPR_OVERLAY_KEY']}")
-            page.wait_for_timeout(2600)
+            page.wait_for_timeout(wait)
             page.add_style_tag(content="body{background:#1a1c1e}")
             result = verify(page) if verify else None
             if shot:
@@ -108,9 +134,15 @@ def main() -> int:
         check("bug", "pre-show countdown", 520, 300,
               lambda pg: True if pg.inner_text("#big").startswith("8:") else
               f"expected ~8:25 left, got {pg.inner_text('#big')!r}", "bug-preshow.png")
-        check("tote", "betting open", 1920, 400,
-              lambda pg: True if pg.inner_text("#pays") == "4x" else
-              f"price plate shows {pg.inner_text('#pays')!r}, expected 4x", "tote-board.png")
+        def tote(pg):
+            if pg.inner_text("#pays") != "4x":
+                return f"price plate shows {pg.inner_text('#pays')!r}, expected 4x"
+            forms = pg.eval_on_selector_all(
+                ".form", "els => els.map(e => e.innerText.split(/\\s+/).join(' ').trim())")
+            # latest first: Mario won week 2 and was 2nd in week 1
+            want = ["1 2", "4 3", "3 4", "2 1"]
+            return True if forms == want else f"form column: {forms}, expected {want}"
+        check("tote", "betting open, with form", 1920, 400, tote, "tote-board.png")
 
         # 2. segment overrunning
         set_segment(rid, 1, 11 * 60 + 20)
@@ -137,6 +169,25 @@ def main() -> int:
             lit = pg.eval_on_selector_all("td.n.lead", "els => els.length")
             return True if lit == 2 else f"expected 2 lit leaders, got {lit}"
         check("bug", "turn 32, last five turns", 520, 420, race_bug, "bug-race.png")
+
+        # 3b. a name callout: fresh all-in shows, an old one isn't replayed on load
+        with db.connect() as conn:
+            conn.execute("DELETE FROM callouts")          # start from a clean feed
+            for who, age in [("rob", 120), ("ana", 1)]:
+                conn.execute(
+                    """INSERT INTO callouts (race_id, bet_id, who, amount, what, all_in, created_at)
+                       VALUES (?, 0, ?, 100, 'Peach to win', 1, ?)""",
+                    (rid, who, time.time() - age))
+
+        def shout(pg):
+            if pg.is_hidden("#shout"):
+                return "callout strip not showing"
+            if pg.inner_text("#shoutTag") != "ALL IN" or pg.inner_text("#shoutWho") != "ana":
+                return f"showed {pg.inner_text('#shoutTag')!r} for {pg.inner_text('#shoutWho')!r}"
+            return True
+        check("bug", "all-in callout", 520, 500, shout, "bug-callout.png")
+        with db.connect() as conn:
+            conn.execute("DELETE FROM callouts")
 
         # 4. bonus question open with money down
         bid = db.open_bonus(rid, "Who wins the next minigame?", ["Mario", "Luigi", "Peach", "Yoshi"], 60)
@@ -167,6 +218,58 @@ def main() -> int:
         check("casters", "crew slips", 1100, 460, None, "caster-slips.png")
         check("ads", "ad rotation", 1280, 260, None, "ad-slot.png")
         check("standings", "season table", 900, 620, None, "standings.png")
+
+        # 8. a Mario Kart race: laps, and no ? tile table
+        kart = db.create_race(42, "MK Night", "Mario Kart", [f"Racer{i}" for i in range(1, 13)],
+                              mode="kart")
+        db.start_show(kart, "standard")
+        set_segment(kart, 2, 60)
+        with db.connect() as conn:
+            conn.execute("UPDATE races SET turn = 2 WHERE id = ?", (kart,))
+
+        def kart_bug(pg):
+            if "laps" not in pg.inner_text("#big"):
+                return f"expected laps, got {pg.inner_text('#big')!r}"
+            if not pg.is_hidden("#table"):
+                return "tally table showing for Kart"
+            return True if pg.is_hidden("#flag") else "last-five-turns flag showing for Kart"
+        check("bug", "Mario Kart, lap 2 of 3", 520, 300, kart_bug, "bug-kart.png")
+
+        # 9. an ad someone uploaded through Discord, alone in the rotation
+        for a in db.ads():
+            db.remove_ad(a["id"])
+        db.add_ad(headline="Community banner", body="", tag="made by ana", accent="#5865f2",
+                  weight=1, status="live", submitted_by=20, submitted_name="ana",
+                  image_blob=banner_png(), image_type="image/png")
+
+        def image_ad(pg):
+            if pg.is_hidden("#shot"):
+                return "uploaded image not shown"
+            width = pg.eval_on_selector("#shot", "img => img.naturalWidth")
+            return True if width == 1170 else f"image didn't load (naturalWidth {width})"
+        check("ads", "uploaded image ad", 1280, 260, image_ad, "ad-uploaded.png")
+        # 10. the winners reveal, after a night with a perfect card
+        win = db.create_race(42, "Week 4", "Mario Party", ["Mario", "Luigi", "Peach", "Yoshi"])
+        db.set_race_status(win, "open")
+        for uid, guess, amt in [(2, ["Mario", "Luigi", "Peach", "Yoshi"], 40),
+                                (4, ["Mario", "Luigi", "Yoshi", "Peach"], 30),
+                                (5, ["Mario", "Peach", "Yoshi", "Luigi"], 20),
+                                (3, ["Luigi", "Mario", "Yoshi", "Peach"], 5)]:
+            ok, why = db.place_slate(win, uid, guess, amt)
+            assert ok, why
+        db.settle_night(win, ["Mario", "Luigi", "Peach", "Yoshi"], "Peach")
+
+        def winners(pg):
+            names = pg.eval_on_selector_all(".row.in .who", "els => els.map(e => e.innerText)")
+            if names != ["ana", "kim"]:
+                return f"revealed rows: {names}"
+            if pg.inner_text(".row.top .profit") != "+120":
+                return f"top profit shows {pg.inner_text('.row.top .profit')!r}"
+            if pg.is_hidden("#perfect") or "ana" not in pg.inner_text("#perfectWho"):
+                return "perfect card banner missing"
+            return True if "Most coins at the end" in pg.inner_text("#props") else "props rail empty"
+        check("winners", "reveal after a perfect card", 1920, 1080, winners, "winners.png", wait=6500)
+
         browser.close()
 
     server.should_exit = True

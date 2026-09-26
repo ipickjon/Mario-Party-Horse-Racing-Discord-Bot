@@ -11,6 +11,10 @@ Nothing here touches real money.
 
 ## Setup
 
+**Bringing in a moderator?** Nothing to install: give them the Race Staff
+role and send them MODERATOR.md. If they'll also run the stream, `/overlay-links`
+gives you the OBS addresses to send them privately.
+
 **SETUP.md walks through everything from zero:** creating the Discord bot,
 putting the code on GitHub, deploying on Railway with a volume so the season
 survives redeploys, adding the overlay to OBS, backups, and what to check
@@ -37,6 +41,7 @@ The overlay pages, each loaded in OBS as
 | `casters` | 1100x460 | The crew's own slips |
 | `ads` | 1280x260 | Rotating fake ad slot |
 | `standings` | 900x700 | Season leaderboard, for the wrap-up |
+| `winners` | 1920x1080 | Results reveal for the wrap-up: final order, biggest winners counted up, perfect cards |
 
 ## How it pays
 
@@ -81,6 +86,15 @@ roughly a third of anyone who shoves everything to be broke after a week.
 only runs when the crew runs it, so it's your call whether busted players
 sit out until the next reset or come back next week.
 
+## Gifting points
+
+`/gift` lets the server host give someone points, for a contest prize or a
+make-good. It's announced in the channel, so the leaderboard stays
+trustworthy, and every gift is logged in the database with who gave it and
+why. A negative amount takes points back, to fix a mistake; a balance never
+goes below zero. `/status` shows gifts on their own line, so they're never
+mistaken for winnings, and `/reset` clears them with everything else.
+
 ## Seasons and /reset
 
 The server host runs `/reset name:"Season 2"` to start over: every wallet
@@ -94,49 +108,86 @@ The first `/race create` opens "Season 1" on its own.
 
 ## Run of show
 
-    /race create week:"Week 4" runners:"Mario, Luigi, Peach, Yoshi"
+Show night is four commands. Crew can type `/help` in Discord for this
+checklist, and MODERATOR.md is a one-page guide to hand a new moderator.
+
+    /race create mode:"Mario Party" week:"Week 4" runners:"Mario, Luigi, Peach, Yoshi"
     /show start template:standard
-    /panel
+    /show next                        (at each break)
+    /race result first:Mario second:Luigi third:Peach fourth:Yoshi coins:Peach
 
-`/show start` puts the scorebug on its first segment and opens betting,
-because the first segment in `config/show.json` says to. From there the
-producer's whole job is `/show next` at each break. The race segment locks
-betting on its own and switches the scorebug from segment clock to turn
-count. `premiere` is the week-one format with the rules block.
+`/race create` can happen any time before the show. `/show start` puts the
+scorebug on its first segment and opens betting. From there, `/show next`
+moves through the rundown in `config/show.json`. When it reaches the race
+segment, it locks betting, switches the scorebug to the turn count, and posts
+the control panel in the channel: one button per character for ? tiles and
+minigame wins, next and previous turn, and undo. In a 2 v 2 or 1 v 3
+minigame, tap every winner.
 
-Post `/panel` in a crew-only channel. It's the control panel for the race:
-one button per character for ? tiles, one for minigame wins, next and
-previous turn, and undo. The message updates in place with the running
-count. In a 2v2 or 1v3 minigame, tap every winner. A misclick is one tap on
-Undo.
+`/race result` is the whole post-game in one command. It settles the ? tiles
+and minigames bets from the panel counts (a tie refunds), the coins bet from
+the `coins` option (pick Tie for a tie), and every order guess. It then closes
+the night, posts one card with the results and standings, and saves a backup
+on the volume. It checks everything before paying anything, so a refusal
+(usually an unsettled bonus question) leaves the night untouched: fix it and
+run it again. Mario Kart races have no props, so no `coins` option.
 
-After the game:
+The step-by-step commands are still there as manual overrides: `/panel` to
+repost the control panel, `/race call` and `/race autograde` for props,
+`/race void` to refund a market, `/race finish` to close a night settled by
+hand, and `/race open` or `/race lock` for the betting window.
 
-    /race autograde                                  # ? tiles and minigames, from the tally
-    /race call market:"Most coins at the end" winner:Peach
-    /race result first:Mario second:Luigi third:Peach fourth:Yoshi
-    /race finish
+## Game modes: Mario Party and Mario Kart
 
-`/race autograde` settles both tallied props from the live count and voids a
-tie rather than guessing. `/race result` pays every order guess the moment
-it's entered. `/race finish` refuses to run until everything is settled,
-then posts the finish, who came out ahead, and the standings.
+`/race create` starts by asking for the mode, and the mode decides what
+everyone sees for the rest of the night:
 
-If something goes wrong, `/race void` refunds a market, the finishing order
-included. Voiding is always safer than guessing.
+| | Mario Party | Mario Kart |
+|---|---|---|
+| Runners | exactly 4 | 2 to 12 |
+| `/bet` and `/race result` show | 4 places, all required | 12 places, first two required |
+| Props (minigames, coins, ? tiles) | yes | no |
+| Counted in | turns, 35 by default | laps, 3 by default |
+| Control panel | tally buttons, next and previous turn, undo | next and previous lap, undo |
 
-## Mario Kart and other games
+Discord fixes a command's options when it's registered, so the bot keeps a
+four-place and a twelve-place version of `/bet` and `/race result` and swaps
+which one your server sees when the mode changes. The swap reaches Discord in
+about a second. Anyone whose Discord hasn't caught up gets told to press
+Ctrl+R. If the bot restarts mid-race, it comes back in that race's mode.
 
-`/race create` takes 2 to 12 runners:
-
-    /race create week:"MK 1" game:"Mario Kart" turns:3 props:false
+    /race create mode:"Mario Kart" week:"MK 1"
         runners:"Mario, Luigi, Peach, Toad, Yoshi, DK, Wario, Bowser, Daisy, Rosalina, Koopa, Shy Guy"
 
-The rule doesn't change: the stake times the places you got right, so a
-perfect 12-racer guess pays 12x. `props:false` drops the Mario Party side
-bets, and the control panel then shows only the turn buttons (use them as
-laps). The board shows the six runners with the most money on each place so
-it stays readable.
+For an eight-racer game like Mario Kart 64, list eight runners; a perfect
+guess then pays 8x. Use `game:` to put a specific title on the board, like
+"Mario Kart 64" or "Mario Party 3".
+
+The payout rule is the same in both: stake times places right. The tote
+board shows the six runners with the most money on each place so it stays
+readable with a full field.
+
+## On-stream extras
+
+**Form guide.** Every runner's last five finishes in the same mode, latest
+first, show beside their name on the tote board, with wins lit. `/form` and
+`/board` show the full record: finishes, wins, starts and average. Names match
+ignoring capitals, Mario Kart form never mixes with Mario Party form, and a
+runner with no history shows as "debut".
+
+**Name callouts.** An all-in, or a bet of at least half someone's stack, gets
+announced publicly in the channel and pops up on the scorebug for six seconds:
+"ana just went ALL IN: 100 on Mario to win!". The bet slip itself stays
+private. Bets under 20 points are never called out, and a cancelled bet takes
+its callout with it. The thresholds are `CALLOUT_FRACTION` and `CALLOUT_MIN`
+in `mpr/economy.py`.
+
+**Winners reveal.** Add the `winners` page full screen in your wrap-up scene.
+After `/race result`, it shows the final order, then counts up the night's
+biggest winners from fifth to first, across every bet they made, and closes on
+a flickering banner if anyone called the whole order. In OBS, tick "Refresh
+browser when scene becomes active" and the reveal replays every time you cut
+to that scene. It stays hidden while a race is running.
 
 ## Bonus questions
 
@@ -165,11 +216,31 @@ five turns.
 
 ## Fake ads
 
-`config/ads.json` holds the rotation. Edit it between shows and the overlay
-picks it up on its next poll, no restart. Each slot needs a headline; body, a
-corner tag, an accent colour, and a weight are optional. Drop an image in
-`config/ads/` and reference it by filename to use artwork instead of text,
-which is the path for community-made ads.
+The ad rotation is managed from Discord, and changes show on stream within a
+few seconds. There's no redeploy, so it's safe mid-show.
+
+| Command | Who | What it does |
+|---|---|---|
+| `/ad add` | Anyone | A headline, an optional line under it, and optionally an uploaded image |
+| `/review-ads` | Crew | Shows the oldest waiting ad, image included, with Approve and Reject buttons |
+| `/ad remove` | Anyone | Crew can remove any ad; everyone else can remove their own |
+| `/ad list` | Anyone | Crew see the rotation and the queue; everyone else sees their own |
+
+Crew ads go live straight away, and crew can set the corner tag and a weight
+from 1 to 10 for how often it comes up. Anyone else's ad waits for approval,
+because whatever's approved goes out on your stream. Their corner tag always
+reads "made by" and their name, their weight is 1, and each person can have
+at most three waiting at once. The bot announces submissions in the channel,
+so the crew sees them come in.
+
+Images must be PNG, JPG, GIF or WebP, up to 4 MB, and are checked by their
+actual contents rather than the file name. They look best at about 1170 × 170
+pixels; other shapes are cropped to fit. Images are saved inside the database,
+so `/backup` includes them and they never stop loading.
+
+`config/ads.json` only supplied the starting ads, on the first run. After that
+it's ignored, apart from `dwell_seconds`, which sets how long each ad stays up.
+Remove the sample ads with `/ad remove` once you have your own.
 
 ## Tuning
 
@@ -189,30 +260,44 @@ Rerun the tests after changing any of it.
 
 ## Commands
 
+There are three groups. Players see only the player commands; Discord hides
+the rest. The crew sees crew commands because the Race Staff role has
+"Manage Events" switched on (SETUP.md step 16), and the host sees
+everything. Every crew command also checks for the Race Staff role when it
+runs, so hiding them is never the only lock.
+
 | Players | |
 |---|---|
+| `/help` | What you can do; crew also see the show-night checklist |
+| `/status` | Your points, your place, and how tonight's bets are doing |
 | `/bet` | Guess the whole finishing order and stake points on it |
 | `/prop` | Side bet: most minigames, most coins, most ? tiles |
+| `/cancel` | Take a bet back, full refund, until betting locks. To change a bet, cancel and bet again |
+| `/form` | How tonight's runners have finished in past races |
 | `/payouts` | How it pays, worth pinning |
-| `/wallet`, `/mybets` | Balance, and what you have riding tonight |
+| `/wallet`, `/mybets` | Just the balance, or just tonight's bets |
 | `/board`, `/leaderboard` | Where the money is, and the standings |
 | `/season status`, `/season hall` | How far into the season, past winners |
+| `/ad add`, `/ad list`, `/ad remove` | Send in a fake ad for the stream |
 
 | Crew | |
 |---|---|
-| `/race create`, `/race finish` | Build and close a race night |
+| `/race create`, `/race result` | Build a race night, and settle and close it in one go |
 | `/show start`, `/show next`, `/show back`, `/show rundown` | Run the segments |
-| `/panel` | Tally and turn buttons for the race |
+| `/panel` | Repost the control panel (it posts itself when the race starts) |
 | `/bonus open`, `/bonus call`, `/bonus void` | Mid-race questions |
-| `/race result`, `/race autograde`, `/race call`, `/race void` | Settle the markets |
+| `/race autograde`, `/race call`, `/race void`, `/race finish` | Manual overrides for settling |
 | `/race open`, `/race lock` | Manual override of the betting window |
 | `/tally` | Manual override of a count |
 | `/railmoney` | Top up anyone who's broke |
 | `/feature` | Put someone's slip on the layout |
+| `/review-ads` | Approve or reject ads people send in |
 
 | Server host | |
 |---|---|
 | `/reset` | Wipe every wallet back to 100 and start a new season |
+| `/gift` | Give someone points, or take some back with a negative amount |
+| `/overlay-links` | The six OBS addresses and sizes, to send to whoever streams |
 | `/backup` | Download a complete copy of the database |
 
 ## Checking it works
@@ -234,7 +319,7 @@ real broadcast, spend five minutes on a test server with a scratch database:
 
 1. Start the bot with `MPR_DB_PATH` pointed at a throwaway file.
 2. Confirm the slash commands appear. If not, check `MPR_GUILD_ID`.
-3. Run a race through `/show start`, a couple of bets, and `/panel`.
+3. Run a race through `/show start`, a couple of bets, and `/show next` into the race.
 4. Tap some panel buttons and confirm the message updates.
 5. Open a 15-second bonus, tap an answer, place a stake, let it close.
 6. Restart the bot, then tap the old panel. It should still work.
@@ -242,6 +327,7 @@ real broadcast, spend five minutes on a test server with a scratch database:
 
 ## Files
 
+    MODERATOR.md           one-page guide for a new moderator
     mpr/economy.py         pricing, grading, ladder, no dependencies
     mpr/db.py              SQLite schema and queries
     mpr/bot.py             slash commands, control panel, bonus buttons
@@ -250,8 +336,8 @@ real broadcast, spend five minutes on a test server with a scratch database:
     .python-version        Python 3.12, the version everything is tested on
     mpr/web/               the six overlay pages
     config/show.json       run-of-show templates
-    config/ads.json        ad rotation, safe to hand to the community
-    config/ads/            ad artwork
+    mpr/ads.py             rules for community ads: text limits, image checks
+    config/ads.json        the starting ads, imported once on first run
     tests/                 unit tests and the broadcast-night run-through
     tools/check_overlays.py  browser check for every overlay page
     data/                  SQLite file, created on first run

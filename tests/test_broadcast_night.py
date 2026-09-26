@@ -54,11 +54,11 @@ def test_full_broadcast_night(fresh_db):
         bot = await build_bot()
 
         # --- before the show ---------------------------------------------------
-        built = await run(bot, "race create", staff(), week="Week 1", runners=FIELD)
+        built = await run(bot, "race create", staff(), mode="Mario Party", week="Week 1", runners=FIELD)
         assert "Week 1** is built" in built.text and "4 runners" in built.text
         assert db.current_season(42)["name"] == "Season 1"     # opened automatically
 
-        dup = await run(bot, "race create", staff(), week="W1b", runners=FIELD)
+        dup = await run(bot, "race create", staff(), mode="Mario Party", week="W1b", runners=FIELD)
         assert "already a race in progress" in dup.text
 
         early = await run(bot, "bet", as_(ANA), amount=10, **order("Mario", "Luigi", "Peach", "Yoshi"))
@@ -75,8 +75,8 @@ def test_full_broadcast_night(fresh_db):
         assert "comes back as 400" in jae.text                 # the spec's own example
         assert db.wallet(10)["balance"] == 0                   # all in is allowed
 
-        short = await run(bot, "bet", as_(ANA), amount=10, **order("Mario", "Luigi", "Peach"))
-        assert "Guess the whole order: all 4 runners" in short.text
+        short = db.place_slate(db.active_race(42)["id"], 20, ["Mario", "Luigi", "Peach"], 10)
+        assert "Guess the whole order: all 4 runners" in short[1]
         twice = await run(bot, "bet", as_(ANA), amount=10, **order("Mario", "Mario", "Peach", "Yoshi"))
         assert "only finish in one place" in twice.text
         bowser = await run(bot, "bet", as_(ANA), amount=10, **order("Mario", "Luigi", "Bowser", "Yoshi"))
@@ -101,6 +101,8 @@ def test_full_broadcast_night(fresh_db):
         await run(bot, "show next", staff())
         game = await run(bot, "show next", staff())
         assert "Betting is now **locked**" in game.text
+        assert game.sent[1]["view"] is not None, "the control panel posts itself"
+        assert "control panel" in game.sent[1]["content"]
         late = await run(bot, "bet", as_(KIM), amount=5, **order("Yoshi", "Peach", "Luigi", "Mario"))
         assert "closed" in late.text
 
@@ -148,28 +150,33 @@ def test_full_broadcast_night(fresh_db):
         called = await run(bot, "bonus call", staff(), market=str(bonus_id), winner="Mario")
         assert "paying 4x" in called.text
 
-        # --- post-game -------------------------------------------------------------------
-        assert "Still uncalled" in (await run(bot, "race finish", staff())).text
+        # --- post-game: one command ------------------------------------------------------
+        rid = db.active_race(42)["id"]
+        partial = db.settle_night(rid, ["Mario", "Luigi"], "Peach")
+        assert "Enter the whole order" in partial["error"]
+        no_coins = await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"),
+                             coins="")
+        assert "Fill in coins" in no_coins.text
+        assert db.race(rid)["status"] == "locked", "a refusal must leave the race untouched"
 
-        graded = await run(bot, "race autograde", staff())
-        assert "Most ? tiles stepped on** — Peach" in graded.text
-        assert "Most minigames won** voided" in graded.text
-        await run(bot, "race call", staff(), market="Most coins at the end", winner="Peach")
+        done = await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"),
+                         coins="Peach")
+        card = done.text
+        assert "Final order:** 1st Mario, 2nd Luigi, 3rd Peach, 4th Yoshi" in card
+        assert "Most ? tiles stepped on:** Peach" in card          # from the panel count
+        assert "Most minigames won:** tie, bets refunded" in card   # 2 v 2 on the panel
+        assert "Most coins at the end:** Peach" in card
+        assert "PERFECT CARD" in card and "Standings" in card
+        assert db.race(rid)["status"] == "settled"
+        assert list((db.DB_PATH.parent / "backups").glob("*Week-1.db")), "snapshot saved"
 
-        partial = await run(bot, "race result", staff(), **order("Mario", "Luigi"))
-        assert "Enter the whole order" in partial.text
-        result = await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"))
-        assert "Final order:** 1st Mario, 2nd Luigi, 3rd Peach, 4th Yoshi" in result.text
-        assert "3 of 4 guesses paid out" in result.text
-        again = await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"))
-        assert "already entered" in again.text
+        again = await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"),
+                          coins="Peach")
+        assert "No race is set up" in again.text
 
         mine = await run(bot, "mybets", as_(ANA))
         assert "Mario > Luigi > Yoshi > Peach" in mine.text
         assert "Who wins the next minigame?" in mine.text
-
-        done = await run(bot, "race finish", staff())
-        assert "PERFECT CARD" in done.text
 
         for task in list(bot._background):
             task.cancel()
@@ -214,9 +221,10 @@ def test_mario_kart_sized_field(fresh_db):
 
     async def go():
         bot = await build_bot()
-        built = await run(bot, "race create", staff(), week="MK1", runners=", ".join(racers),
-                          game="Mario Kart", turns=3, props=False)
-        assert "12 runners" in built.text and "No props" in built.text
+        built = await run(bot, "race create", staff(), mode="Mario Kart", week="MK1",
+                          runners=", ".join(racers))
+        assert "12 runners" in built.text and "No props" in built.text and "3 laps" in built.text
+        assert bot.mode == "kart" and bot.syncs == ["kart"]
         await run(bot, "race open", staff())
         bet = await run(bot, "bet", as_(ANA), amount=10, **order(*racers))
         assert "comes back as 120" in bet.text
@@ -229,12 +237,10 @@ def test_mario_kart_sized_field(fresh_db):
 
         panel = await run(bot, "panel", staff())
         labels = {c.item.label for c in panel.sent[0]["view"].children}
-        assert labels == {"Next turn", "Turn back", "Undo last"}   # no tally buttons
+        assert labels == {"Next lap", "Lap back", "Undo last"}   # laps, no tally buttons
 
-        await run(bot, "race lock", staff())
-        await run(bot, "race result", staff(), **order(*racers))
-        done = await run(bot, "race finish", staff())
-        assert "PERFECT CARD" in done.text
+        done = await run(bot, "race result", staff(), **order(*racers))
+        assert "PERFECT CARD" in done.text              # no coins needed: Kart has no props
 
     asyncio.run(go())
     assert db.wallet(20)["balance"] == 100 - 10 + 120
@@ -251,16 +257,14 @@ def test_reset_is_host_only_and_needs_a_second_click(fresh_db):
 
     async def go():
         bot = await build_bot()
-        await run(bot, "race create", staff(), week="W1", runners=FIELD)
+        await run(bot, "race create", staff(), mode="Mario Party", week="W1", runners=FIELD)
         await run(bot, "race open", staff())
         await run(bot, "bet", as_(ANA), amount=40, **order("Mario", "Luigi", "Peach", "Yoshi"))
 
         blocked = await run(bot, "reset", Interaction(**HOST), name="Season 2")
         assert "Finish the race in progress" in blocked.text
-        await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"))
-        for prop in ("Most minigames won", "Most coins at the end", "Most ? tiles stepped on"):
-            await run(bot, "race void", staff(), market=prop)
-        await run(bot, "race finish", staff())
+        await run(bot, "race result", staff(), **order("Mario", "Luigi", "Peach", "Yoshi"),
+                  coins="tie")
         assert db.wallet(20)["balance"] == 100 - 40 + 160
 
         crew = await run(bot, "reset", staff(), name="Season 2")
@@ -323,7 +327,7 @@ def test_relocking_the_board_leaves_a_running_bonus_alone(fresh_db):
 
     async def go():
         bot = await build_bot()
-        await run(bot, "race create", staff(), week="W", runners=FIELD)
+        await run(bot, "race create", staff(), mode="Mario Party", week="W", runners=FIELD)
         await run(bot, "race open", staff())
         await run(bot, "race lock", staff())
         rid = db.active_race(42)["id"]
@@ -370,7 +374,7 @@ def test_unexpected_errors_are_caught_and_logged(fresh_db, monkeypatch, caplog):
 def test_rundown_edges(fresh_db):
     async def go():
         bot = await build_bot()
-        await run(bot, "race create", staff(), week="W", runners="A, B, C, D")
+        await run(bot, "race create", staff(), mode="Mario Party", week="W", runners="A, B, C, D")
         assert "No show template" in (await run(bot, "show start", staff(), template="nope")).text
         await run(bot, "show start", staff(), template="premiere")
         assert "first segment" in (await run(bot, "show back", staff())).text
@@ -387,7 +391,7 @@ def test_autocomplete_lists(fresh_db):
 
     async def go():
         bot = await build_bot()
-        await run(bot, "race create", staff(), week="W", runners=FIELD)
+        await run(bot, "race create", staff(), mode="Mario Party", week="W", runners=FIELD)
         inter = as_(ANA)
         assert [c.value for c in await B.entrant_options(inter, "pe")] == ["Peach"]
         assert {c.value for c in await B.template_options(inter, "")} == {"premiere", "standard"}
@@ -428,6 +432,59 @@ def test_command_tree_is_valid_for_discord(fresh_db):
 
     names = asyncio.run(go())
     for required in ("bet", "prop", "leaderboard", "reset", "race result", "panel",
-                     "show next", "bonus open", "race autograde"):
+                     "show next", "bonus open", "race autograde", "status", "review-ads"):
         assert required in names
     assert "season start" not in names          # replaced by /reset
+
+
+def test_the_setup_guide_dry_run_behaves_as_written(fresh_db):
+    """SETUP.md parts 6 and 7, step by step, checking each reply the guide
+    tells the reader to expect."""
+    db = fresh_db
+    jon = dict(user_id=1, name="Jon", staff=True, host=True)
+
+    async def go():
+        bot = await build_bot()
+        me = lambda: Interaction(**jon)                                     # noqa: E731
+
+        assert "How it pays" in (await run(bot, "payouts", me())).text      # 49
+        asked = await run(bot, "reset", me(), name="Test")                  # 50
+        await click(asked.sent[0]["view"], "Reset everything", me())
+        assert db.current_season(42)["name"] == "Test"
+        assert "**Test** is built" in (await run(bot, "race create", me(), mode="Mario Party", week="Test",
+                                                 runners="Mario, Luigi, Peach, Yoshi")).text  # 51
+        started = await run(bot, "show start", me(), template="standard")   # 52
+        assert "Pre-show" in started.text and "open" in started.text
+        bet = await run(bot, "bet", me(), amount=10, **order("Mario", "Luigi", "Peach", "Yoshi"))
+        assert "You have 90 points left" in bet.text                        # 53
+        await run(bot, "prop", me(), market="Most coins at the end", pick="Peach", amount=5)  # 54
+        await run(bot, "show next", me())                                   # 59
+        game = await run(bot, "show next", me())
+        assert "locked" in game.text and "control panel is below" in game.text
+        pb = buttons(game.sent[1]["view"])                                  # 60
+        for label in ("? Peach", "? Peach", "Won: Yoshi", "Next turn", "Undo last"):
+            await press(pb[label], jon)
+        opened = await run(bot, "bonus open", me(), question="Test bonus", seconds=30)  # 62
+        bid = db.bonus_markets(db.active_race(42)["id"])[0]["id"]
+        modal = (await press(buttons(opened.sent[0]["view"])["Mario"], jon)).modals[0]
+        modal.amount._value = "5"
+        await modal.on_submit(me())
+        with db.connect() as conn:                                          # 63
+            conn.execute("UPDATE markets SET closes_at = ? WHERE id = ?", (time.time() - 1, bid))
+        assert "paying 4x" in (await run(bot, "bonus call", me(), market=str(bid),
+                                         winner="Mario")).text
+        card = (await run(bot, "race result", me(),                         # 64
+                          **order("Mario", "Luigi", "Peach", "Yoshi"), coins="Peach")).text
+        assert "Test is in the books" in card and "Final order" in card
+        assert "Most ? tiles stepped on:** Peach" in card
+        assert (await run(bot, "backup", me())).sent[0]["file"] is not None             # 65
+        asked = await run(bot, "reset", me(), name="Season 1")              # 66
+        await click(asked.sent[0]["view"], "Reset everything", me())
+        for task in list(bot._background):
+            task.cancel()
+        await asyncio.gather(*bot._background, return_exceptions=True)
+
+    asyncio.run(go())
+    assert db.current_season(42)["name"] == "Season 1"
+    assert db.wallet(1)["balance"] == 100
+    assert [r["season"] for r in db.hall_of_fame(42)] == ["Test"]

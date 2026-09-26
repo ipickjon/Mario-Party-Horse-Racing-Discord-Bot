@@ -53,6 +53,22 @@ MIN_WAGER = 1
 
 MIN_RUNNERS, MAX_RUNNERS = 2, 12
 
+# Name callouts: a bet is announced (in Discord and on the scorebug) when it's
+# the whole stack, or at least this share of it, and at least CALLOUT_MIN.
+CALLOUT_FRACTION = 0.5
+CALLOUT_MIN = 20
+
+
+def callout_kind(stack_before: int, amount: int) -> str | None:
+    """'allin', 'big', or None for an ordinary bet."""
+    if amount < CALLOUT_MIN:
+        return None
+    if amount >= stack_before:
+        return "allin"
+    if amount >= stack_before * CALLOUT_FRACTION:
+        return "big"
+    return None
+
 
 def slate_multiplier(correct: int) -> int:
     if correct <= 0:

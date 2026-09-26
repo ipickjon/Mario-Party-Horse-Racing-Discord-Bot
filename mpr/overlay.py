@@ -19,7 +19,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db, economy
@@ -76,13 +76,33 @@ app.mount("/ads/img", StaticFiles(directory=ADS_IMAGES), name="ad-images")
 
 
 def load_ads() -> dict:
-    """Read the ad config fresh each poll so edits land without a restart."""
-    try:
-        data = json.loads(ADS_FILE.read_text())
-    except (OSError, ValueError):
-        return {"dwell_seconds": 12, "slots": []}
-    slots = [s for s in data.get("slots", []) if s.get("headline") or s.get("image")]
-    return {"dwell_seconds": data.get("dwell_seconds", 12), "slots": slots}
+    """The live rotation, straight from the database, so an ad added or
+    removed in Discord shows up on the next poll with no restart."""
+    slots = []
+    for a in db.ads(status="live"):
+        if a["has_upload"]:
+            image_url = f"/ads/uploaded/{a['id']}"
+        elif a["image_file"]:
+            image_url = f"/ads/img/{a['image_file']}"
+        else:
+            image_url = None
+        slots.append({"id": a["id"], "headline": a["headline"], "body": a["body"],
+                      "tag": a["tag"], "accent": a["accent"], "weight": a["weight"],
+                      "image_url": image_url})
+    return {"dwell_seconds": db.ad_dwell_seconds(), "slots": slots}
+
+
+@app.get("/ads/uploaded/{ad_id}")
+def uploaded_ad_image(ad_id: int):
+    """An image sent in through /ad add. Only live ads are served, so nothing
+    waiting for review can be reached from outside."""
+    a = db.ad(ad_id)
+    image = db.ad_image(ad_id) if a is not None and a["status"] == "live" else None
+    if image is None:
+        return PlainTextResponse("No such ad.", status_code=404)
+    blob, media_type = image
+    return Response(content=blob, media_type=media_type,
+                    headers={"Cache-Control": "public, max-age=300"})
 
 
 def current_race():
@@ -139,6 +159,7 @@ def state():
     # The tote board cycles through one view per finishing place (how much
     # money has each runner there), then the props. With a big field it
     # shows the six runners with the most money on each place.
+    records = db.form(names, race["mode"], race["guild_id"])
     markets = []
     slate = db.slate_market(race["id"])
     n = len(names)
@@ -151,7 +172,7 @@ def state():
             "status": slate["status"] if slate else "closed",
             "result": None, "staked": staked, "multiplier": None,
             "runners": [{"name": x, "color": meta[x][0], "slot": meta[x][1],
-                         "staked": money.get(x, 0),
+                         "staked": money.get(x, 0), "form": records[x]["recent"],
                          "share": money.get(x, 0) / staked if staked else 0} for x in shown],
         })
     for m in db.markets(race["id"], ("prop",)):
@@ -163,7 +184,7 @@ def state():
             "status": m["status"], "result": m["result"], "staked": staked,
             "multiplier": m["multiplier"],
             "runners": [{"name": x, "color": meta[x][0], "slot": meta[x][1],
-                         "staked": totals.get(x, 0),
+                         "staked": totals.get(x, 0), "form": records[x]["recent"],
                          "share": totals.get(x, 0) / staked if staked else 0} for x in shown],
         })
 
@@ -188,7 +209,8 @@ def state():
         "season": ({"name": season["name"], "done": db.season_races(season["id"]),
                     "length": economy.SEASON_LENGTH} if season else None),
         "race": {"week": race["week_label"], "game": race["game"], "status": race["status"],
-                 "turn": race["turn"], "total_turns": race["total_turns"]},
+                 "turn": race["turn"], "total_turns": race["total_turns"],
+                 "mode": race["mode"], "unit": db.MODES[race["mode"]]["unit"]},
         "show": ({"current": show["current"], "next": show["next"],
                   "index": show["index"], "count": len(show["segments"]),
                   "started": show["started"]} if show else None),
@@ -200,6 +222,8 @@ def state():
             for key in db.TALLIED_PROPS
         },
         "bonus": bonus_payload(race["id"], meta, now),
+        "callouts": db.recent_callouts(race["id"]),
+        "results": db.night_results(race["id"]),
         "ladder": [{"correct": k, "multiplier": mult, "chance": chance}
                    for k, mult, chance in tiers],
         "field_size": n,
@@ -216,7 +240,7 @@ def _page(name: str):
     return FileResponse(WEB / f"{name}.html")
 
 
-for _name in ("tote", "standings", "casters", "ads", "bug", "bonus"):
+for _name in ("tote", "standings", "casters", "ads", "bug", "bonus", "winners"):
     app.add_api_route(f"/{_name}", (lambda n=_name: _page(n)), methods=["GET"])
 
 
