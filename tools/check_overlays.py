@@ -202,10 +202,10 @@ def main() -> int:
         with db.connect() as conn:
             conn.execute("UPDATE markets SET closes_at = ? WHERE id = ?", (time.time() - 1, bid))
         db.lock_expired_bonuses()
-        db.call_market_id(bid, "Luigi")
-        check("bonus", "settled, winner shown", 1280, 460,
-              lambda pg: True if pg.eval_on_selector_all(".opt.win", "e => e.length") == 1 else
-              "winner row not lit", "bonus-settled.png")
+        db.call_market_id(bid, ["Luigi", "Yoshi"])               # a 2 v 2
+        check("bonus", "settled, two winners lit", 1280, 460,
+              lambda pg: True if pg.eval_on_selector_all(".opt.win", "e => e.length") == 2 else
+              f"lit rows: {pg.eval_on_selector_all('.opt.win', 'e => e.length')}", "bonus-settled.png")
 
         # 6. nothing running: the band must hide itself
         with db.connect() as conn:
@@ -248,6 +248,91 @@ def main() -> int:
             width = pg.eval_on_selector("#shot", "img => img.naturalWidth")
             return True if width == 1170 else f"image didn't load (naturalWidth {width})"
         check("ads", "uploaded image ad", 1280, 260, image_ad, "ad-uploaded.png")
+        # 9b. ad text always fits the slot, however long
+        cases = [
+            ("the headline that overflowed on stream",
+             "HEADLINE: YOSHI DEADLOCK GETS SECOND IN MARIO PARTY", "", "made by ToadyHawk"),
+            ("the longest ad allowed",
+             "W" * 60, "M" * 120, "made by someone with a long name"),
+            ("one 60-letter word", "Supercalifragilistic" * 3, "", "made by ana"),
+            ("a short ad keeps full size", "Join the Discord", "discord.gg/example", ""),
+        ]
+        fit_js = """() => {
+            const r = el => el.getBoundingClientRect();
+            const slot = r(document.getElementById('slot'));
+            const parts = ['headline', 'body'].map(id => document.getElementById(id))
+                                              .filter(el => !el.hidden && el.textContent);
+            const tag = document.getElementById('tag');
+            const inside = parts.every(el => { const b = r(el);
+                return b.left >= slot.left - 1 && b.right <= slot.right + 1 &&
+                       b.top >= slot.top - 1 && b.bottom <= slot.bottom + 1; });
+            const hit = tag.textContent && parts.some(el => { const a = r(el), t = r(tag);
+                return !(a.right <= t.left || a.left >= t.right || a.bottom <= t.top || a.top >= t.bottom); });
+            const copy = document.getElementById('copy');
+            return { inside, hit: !!hit,
+                     size: parseFloat(getComputedStyle(document.getElementById('headline')).fontSize),
+                     spills: copy.scrollHeight > copy.clientHeight + 1 && !copy.classList.contains('clamped') };
+        }"""
+        for label, headline, body, tag in cases:
+            for a in db.ads():
+                db.remove_ad(a["id"])
+            db.add_ad(headline=headline, body=body, tag=tag, accent="#ffa81e", weight=1,
+                      status="live", submitted_by=1, submitted_name="t")
+
+            def fits(pg, short=(label == "a short ad keeps full size")):
+                m = pg.evaluate(fit_js)
+                if not m["inside"] or m["spills"]:
+                    return f"text escapes the slot: {m}"
+                if m["hit"]:
+                    return f"text runs into the corner tag: {m}"
+                if m["size"] < 26:
+                    return f"shrank below readable: {m['size']}px"
+                if short and m["size"] != 50:
+                    return f"short ad shrank to {m['size']}px"
+                return True
+            name = "ad-fit-" + label.split()[1] + ".png"
+            check("ads", label, 1280, 260, fits, name)
+
+        # 9c. the ad slot fills whatever size the OBS source is; images are never cropped
+        for a in db.ads():
+            db.remove_ad(a["id"])
+        db.add_ad(headline="HEADLINE: YOSHI DEADLOCK GETS SECOND IN MARIO PARTY", body="",
+                  tag="made by ToadyHawk", accent="#ffa81e", weight=1, status="live",
+                  submitted_by=1, submitted_name="t")
+        for w, h in [(1280, 260), (900, 200), (1600, 320)]:
+            def fills(pg, w=w, h=h):
+                box = pg.evaluate("() => { const r = document.getElementById('slot').getBoundingClientRect();"
+                                  " return [r.left, r.top, r.right, r.bottom]; }")
+                if box[0] < 0 or box[1] < 0 or box[2] > w or box[3] > h:
+                    return f"slot {box} doesn't fit a {w}x{h} source"
+                if box[2] - box[0] < w - 40:
+                    return f"slot only {box[2] - box[0]:.0f}px wide in a {w}px source"
+                m = pg.evaluate(fit_js)
+                return True if m["inside"] and not m["spills"] and not m["hit"] else f"text: {m}"
+            check("ads", f"fills a {w}x{h} source", w, h, fills, f"ad-size-{w}.png")
+
+        for a in db.ads():
+            db.remove_ad(a["id"])
+        db.add_ad(headline="Square art", body="", tag="made by ana", accent="#5865f2", weight=1,
+                  status="live", submitted_by=20, submitted_name="ana",
+                  image_blob=banner_png(300, 300), image_type="image/png")
+        check("ads", "a square image is shown whole", 1280, 260,
+              lambda pg: True if pg.eval_on_selector("#shot", "i => getComputedStyle(i).objectFit") == "contain"
+              and pg.eval_on_selector("#shot", "i => i.naturalWidth") == 300 else "image cropped or missing",
+              "ad-square.png")
+
+        # 9d. a bet left open until betting locks shows "Open", not a countdown
+        shown = db.latest_race(None)["id"]                  # the race the overlay is showing
+        uid = db.open_bonus(shown, "First to land on the bank?", ["Mario", "Luigi", "Peach", "Yoshi"],
+                            None, None, "character", 2)
+        with db.connect() as conn:
+            conn.execute("UPDATE markets SET status = 'open' WHERE id = ?", (uid,))
+        check("bonus", "open until betting locks", 1280, 460,
+              lambda pg: True if pg.inner_text("#clock") == "Open" else f"clock: {pg.inner_text('#clock')!r}")
+        db.call_market_id(uid, None)
+        with db.connect() as conn:
+            conn.execute("UPDATE markets SET called_at = 0 WHERE id = ?", (uid,))
+
         # 10. the winners reveal, after a night with a perfect card
         win = db.create_race(42, "Week 4", "Mario Party", ["Mario", "Luigi", "Peach", "Yoshi"])
         db.set_race_status(win, "open")

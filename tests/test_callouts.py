@@ -43,7 +43,7 @@ def test_all_in_and_big_bets_are_announced_publicly(fresh_db):
         shove = await run(bot, "bet", Interaction(**ANA), amount=100, **order(*FIELD))
         half = await run(bot, "bet", Interaction(**ROB), amount=60, **order(*reversed(FIELD)))
         small = await run(bot, "bet", Interaction(**KIM), amount=10, **order(*FIELD))
-        prop = await run(bot, "prop", Interaction(**ROB), market="Most coins at the end",
+        prop = await run(bot, "sidebet", Interaction(**ROB), market="Most coins at the end",
                          pick="Peach", amount=20)
         return shove, half, small, prop
 
@@ -51,7 +51,7 @@ def test_all_in_and_big_bets_are_announced_publicly(fresh_db):
     assert public(shove) == ["ana just went ALL IN: 100 on Mario to win!"]
     assert shove.sent[0]["ephemeral"], "the bet slip itself stays private"
     assert public(half) == ["rob just put 60 on Yoshi to win!"]
-    assert public(small) == []
+    assert public(small) == ["**kim** bet 10: 🟥 Mario › 🟩 Luigi › 🟧 Peach › 🟦 Yoshi"]  # plain line
     assert public(prop) == ["rob just put 20 on Peach for most coins at the end!"]   # half of his last 40
 
 

@@ -21,7 +21,7 @@ async def night_with_bets(bot):
               runners=", ".join(FIELD))
     await run(bot, "race open", Interaction(**CREW))
     await run(bot, "bet", Interaction(**ANA), amount=30, **order(*FIELD))
-    await run(bot, "prop", Interaction(**ANA), market="Most coins at the end", pick="Luigi", amount=10)
+    await run(bot, "sidebet", Interaction(**ANA), market="Most coins at the end", pick="Luigi", amount=10)
     return DB.active_race(42)["id"]
 
 
@@ -40,14 +40,6 @@ def test_every_refusal_leaves_the_night_untouched(fresh_db):
         bot = await build_bot()
         rid = await night_with_bets(bot)
         mid = db.open_bonus(rid, "Who wins the next one?", FIELD, 60)
-
-        blocked = await run(bot, "race result", Interaction(**CREW), **order(*FIELD), coins="Luigi")
-        assert "Settle the bonus questions first" in blocked.text and "Who wins the next one?" in blocked.text
-
-        with db.connect() as conn:
-            conn.execute("UPDATE markets SET closes_at = ? WHERE id = ?", (time.time() - 1, mid))
-        db.call_market_id(mid, None)
-
         dup = await run(bot, "race result", Interaction(**CREW),
                         **order("Mario", "Mario", "Peach", "Yoshi"), coins="Luigi")
         assert "only finish in one place" in dup.text
@@ -61,6 +53,9 @@ def test_every_refusal_leaves_the_night_untouched(fresh_db):
 
         ok = await run(bot, "race result", Interaction(**CREW), **order(*FIELD), coins="Luigi")
         assert "Week 9 is in the books" in ok.text
+        # the bonus nobody settled was refunded, not left hanging
+        assert "Refunded, never settled" in ok.text and "Who wins the next one?" in ok.text
+        assert db.market_by_id(mid)["result"] == "VOID"
 
     asyncio.run(go())
     assert db.wallet(20)["balance"] == 60 + 30 * 4 + 10 * 2

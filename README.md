@@ -45,7 +45,7 @@ The overlay pages, each loaded in OBS as
 
 ## How it pays
 
-Everyone starts with 100 points and can bet as much of it as they like.
+Everyone starts with 1,000 points and can bet as much of it as they like.
 
 **Finishing order.** `/bet` takes a guess at the whole order, 1st to last,
 and one stake. The stake comes back multiplied by how many places were right:
@@ -61,8 +61,8 @@ Spend 100 and get all four right, you have 400. Spend 50, you have 200.
 Three right can't happen with four runners: if three are right, the fourth
 is forced.
 
-**Props.** `/prop` on most minigames won, most coins at the end, or most ?
-tiles. Pays 2x. Minigames goes to whoever won the most minigames, counted
+**Side bets.** `/sidebet` on first to get a star, most minigames won, most
+coins at the end, or most ? tiles. Pays 2x. Minigames goes to whoever won the most minigames, counted
 live on the control panel. Coins goes to whoever holds the most coins when
 the race ends. The game's own bonus stars don't settle either one, even
 where the game names a star the same thing. A tie refunds the bet.
@@ -98,7 +98,7 @@ mistaken for winnings, and `/reset` clears them with everything else.
 ## Seasons and /reset
 
 The server host runs `/reset name:"Season 2"` to start over: every wallet
-goes back to 100, and the old table is saved first so `/season hall` shows
+goes back to 1,000, and the old table is saved first so `/season hall` shows
 past winners. It asks for a second click before doing anything, only the
 person who ran it can confirm, and it's hidden from everyone without Manage
 Server. It won't run mid-race. Use it between seasons, or when switching
@@ -147,7 +147,7 @@ everyone sees for the rest of the night:
 | Runners | exactly 4 | 2 to 12 |
 | `/bet` and `/race result` show | 4 places, all required | 12 places, first two required |
 | Props (minigames, coins, ? tiles) | yes | no |
-| Counted in | turns, 35 by default | laps, 3 by default |
+| Counted in | turns, 20 by default, from turn 1 | laps, 3 by default, from lap 1 |
 | Control panel | tally buttons, next and previous turn, undo | next and previous lap, undo |
 
 Discord fixes a command's options when it's registered, so the bot keeps a
@@ -189,30 +189,31 @@ a flickering banner if anyone called the whole order. In OBS, tick "Refresh
 browser when scene becomes active" and the reveal replays every time you cut
 to that scene. It stays hidden while a race is running.
 
-## Bonus questions
+## Bonus bets
 
-The pre-show window is where betting happens, which leaves ninety minutes of
-race with nothing for viewers to do. Bonus questions fill that gap.
+    /bonus bet question:"Will Luigi turn it around?" type:"Yes or No"
 
-    /bonus open question:"Who wins the next minigame?" seconds:60
+Pick a type and the answers fill themselves in:
 
-That posts a message with one button per answer. Viewers tap one, type a
-stake, done. The bonus band slides onto the stream with a countdown and the
-live split, locks itself when the clock runs out, and the Discord post greys
-its buttons at the same moment. Then:
+| Type | Answers | Each person can back | Default timer |
+|---|---|---|---|
+| Yes or No | Yes, No | one side | 90 seconds |
+| Pick a character | tonight's runners | up to two | 90 seconds |
+| Minigame winner | tonight's runners, plus Draw at 8x | up to two | 60 seconds |
 
-    /bonus call market:"Who wins the next minigame?" winner:Luigi
+Prices default to fair odds: 2x on a yes/no, 4x on a four-way pick. The post
+lists who backed each answer, and has crew buttons: **Close now**, **Pay out**
+(pick the winner; pick two for a 2 v 2) and **Delete** (refunds everyone).
+`/bonus call` and `/bonus void` still work as typed alternatives.
 
-It pays immediately, and the band shows the winner for 25 seconds before
-hiding again.
+The control panel's 🎮 button opens a minigame bet in one tap. Players at zero
+points get one free pick on each minigame bet, worth 10 if it lands, so
+nobody is ever stuck watching.
 
-Answers default to tonight's four characters. For anything else, pass them:
-`options:"Yes, No"`. Pricing defaults to fair odds, so a four-way pick pays
-4x and a yes/no pays 2x. Override with `pays:` to make one juicier.
-
-A few that work well: who wins the next minigame, will anyone steal a star
-this turn, who's in last after turn 20, does the leader change in the last
-five turns.
+Set the timer to "Until betting locks" for bets set up at the start of the
+show, like who's first to land on the bank. Several can run at once. They
+close when the race starts, you pay them out when it happens, and any that
+never happen are refunded by `/race result`.
 
 ## Fake ads
 
@@ -221,14 +222,15 @@ few seconds. There's no redeploy, so it's safe mid-show.
 
 | Command | Who | What it does |
 |---|---|---|
-| `/ad add` | Anyone | A headline, an optional line under it, and optionally an uploaded image |
+| `/ad submit` | Anyone | A headline, an optional line under it, and optionally an uploaded image |
 | `/review-ads` | Crew | Shows the oldest waiting ad, image included, with Approve and Reject buttons |
 | `/ad remove` | Anyone | Crew can remove any ad; everyone else can remove their own |
 | `/ad list` | Anyone | Crew see the rotation and the queue; everyone else sees their own |
 
-Crew ads go live straight away, and crew can set the corner tag and a weight
-from 1 to 10 for how often it comes up. Anyone else's ad waits for approval,
-because whatever's approved goes out on your stream. Their corner tag always
+Every ad waits for approval in `/review-ads`, crew ones included, so each is
+judged on its own before it airs. Crew can set the corner tag and a weight
+from 1 to 10. "Approve and pin" brings an ad back every 4th ad; the Discord
+promo is pinned from the start. Their corner tag always
 reads "made by" and their name, their weight is 1, and each person can have
 at most three waiting at once. The bot announces submissions in the channel,
 so the crew sees them come in.
@@ -271,21 +273,27 @@ runs, so hiding them is never the only lock.
 | `/help` | What you can do; crew also see the show-night checklist |
 | `/status` | Your points, your place, and how tonight's bets are doing |
 | `/bet` | Guess the whole finishing order and stake points on it |
-| `/prop` | Side bet: most minigames, most coins, most ? tiles |
+| `/sidebet` | Side bet: first star, most minigames, most coins, most ? tiles |
+| `/bets` | Everyone's bets tonight, with character icons |
 | `/cancel` | Take a bet back, full refund, until betting locks. To change a bet, cancel and bet again |
 | `/form` | How tonight's runners have finished in past races |
 | `/payouts` | How it pays, worth pinning |
+
+Every bet gets a one-line post in the channel showing who backed what, with
+character icons: upload server emoji named after the runners (`:Mario:`) and
+they're used automatically, otherwise each runner gets its colour square.
+Every bet slip has an **Undo** button until betting locks.
 | `/wallet`, `/mybets` | Just the balance, or just tonight's bets |
 | `/board`, `/leaderboard` | Where the money is, and the standings |
 | `/season status`, `/season hall` | How far into the season, past winners |
-| `/ad add`, `/ad list`, `/ad remove` | Send in a fake ad for the stream |
+| `/ad submit`, `/ad list`, `/ad remove` | Send in a fake ad for the stream |
 
 | Crew | |
 |---|---|
 | `/race create`, `/race result` | Build a race night, and settle and close it in one go |
 | `/show start`, `/show next`, `/show back`, `/show rundown` | Run the segments |
 | `/panel` | Repost the control panel (it posts itself when the race starts) |
-| `/bonus open`, `/bonus call`, `/bonus void` | Mid-race questions |
+| `/bonus bet`, `/bonus call`, `/bonus void` | Bonus bets (the post's buttons do the same) |
 | `/race autograde`, `/race call`, `/race void`, `/race finish` | Manual overrides for settling |
 | `/race open`, `/race lock` | Manual override of the betting window |
 | `/tally` | Manual override of a count |
@@ -295,7 +303,7 @@ runs, so hiding them is never the only lock.
 
 | Server host | |
 |---|---|
-| `/reset` | Wipe every wallet back to 100 and start a new season |
+| `/reset` | Wipe every wallet back to 1,000 and start a new season |
 | `/gift` | Give someone points, or take some back with a negative amount |
 | `/overlay-links` | The six OBS addresses and sizes, to send to whoever streams |
 | `/backup` | Download a complete copy of the database |
@@ -308,7 +316,7 @@ runs, so hiding them is never the only lock.
 
 The tests play a complete broadcast night through the real command code,
 using discord.py's own permission checks and invocation path: a season, the
-rundown, full-order guesses and props, the control panel through all 35 turns
+rundown, full-order guesses and side bets, the control panel through all 20 turns
 with a misclick and an undo, a bonus question from open to payout, autograde,
 the finishing order, a 12-racer Mario Kart night, and a host-only reset. Every wallet is checked against a hand-computed balance and
 against the ledger. The overlay check loads every page in a real browser in

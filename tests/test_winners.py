@@ -29,7 +29,7 @@ def night(fresh_db, bets, props=()):
             await run(bot, "bet", Interaction(user_id=uid, name=PLAYERS[uid]), amount=amount,
                       **order(*guess))
         for uid, pick, amount in props:
-            await run(bot, "prop", Interaction(user_id=uid, name=PLAYERS[uid]),
+            await run(bot, "sidebet", Interaction(user_id=uid, name=PLAYERS[uid]),
                       market="Most coins at the end", pick=pick, amount=amount)
         live = TestClient(overlay.app).get("/state.json").json()["results"]
         assert live is None, "nothing to reveal while the race is still going"

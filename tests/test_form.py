@@ -20,7 +20,7 @@ def past_race(db, finish, mode="party", week="W"):
     rid = db.create_race(42, week, "Mario Party", names, mode=mode)
     db.set_race_status(rid, "open")
     db.settle_order(rid, finish)
-    for key in ("minigames", "coins", "qtiles"):
+    for key in db.PROP_KEYS:                      # every side bet, however many there are
         if db.market(rid, "prop", key):
             db.call_market(rid, "prop", key, None)
     db.finish_race(rid)
@@ -47,7 +47,7 @@ def test_form_keeps_modes_apart_and_skips_voided_results(fresh_db):
     voided = db.create_race(42, "void", "MP", FIELD)
     db.set_race_status(voided, "open")
     db.settle_order(voided, None)
-    for key in ("minigames", "coins", "qtiles"):
+    for key in db.PROP_KEYS:
         db.call_market(voided, "prop", key, None)
     db.finish_race(voided)
     assert db.form(["Mario"], "party")["Mario"]["recent"] == [1]

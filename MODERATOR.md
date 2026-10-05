@@ -37,11 +37,27 @@ the channel. During the race, tap the panel:
 The tap counts decide the ? tiles and minigames bets, so keep up with them.
 The scorebug on stream updates within a couple of seconds.
 
-**Optional, during the race: bonus questions**
+**During the race: the panel, and bonus bets**
 
-`/bonus open` with a question, like "Who wins the next minigame?". Players
-tap an answer on the post before the timer runs out. When it's decided,
-`/bonus call` with the answer.
+The control panel also has:
+
+- "★ Mario" and so on: tap whoever gets the first star the moment it
+  happens. That pays the first-star side bets right away.
+- "🎮 Minigame bet": tap it before each minigame. It opens a 60-second
+  "who wins this minigame?" bet, with a Draw option that pays 8x.
+
+`/bonus bet` opens any other quick question. Pick a type: **Yes or No**
+(players back one side), **Pick a character** (up to two), or **Minigame
+winner**. Every bonus post has crew buttons:
+
+- **Close now** stops betting early.
+- **Pay out** asks who won and pays everyone. Pick two for a 2 v 2.
+- **Delete** refunds everyone and removes the post.
+
+At the start of the show you can set up several "who's first to..." bets at
+once (first to land on the bank, first to get an item) with the timer set to
+"Until betting locks". Pay them out when it happens. Any that never happen are
+refunded automatically by `/race result`.
 
 **4. After the race: `/race result`**
 
@@ -56,8 +72,8 @@ it again. The usual reason is a bonus question you haven't called yet.
 
 ## Fixing mistakes
 
-Players can take their own bets back with `/cancel` until betting locks, so
-point anyone with a wrong bet there. After betting locks, bets are final.
+Every bet slip has an **Undo** button (and `/cancel` does the same) until
+betting locks. After that, bets are final.
 
 
 | Problem | Fix |
@@ -65,7 +81,7 @@ point anyone with a wrong bet there. After betting locks, bets are final.
 | Tapped the wrong button on the panel | "Undo last" |
 | A count went badly wrong | `/tally` to adjust it by hand |
 | A bet market can't be settled fairly | `/race void` refunds everyone on it |
-| A bonus question went wrong | `/bonus void` refunds it |
+| A bonus question went wrong | **Delete** on the post refunds everyone |
 | The panel scrolled away | `/panel` posts a new one |
 | Opened betting too early or late | `/race open` and `/race lock` |
 | Someone's out of points | `/railmoney` tops up anyone below 100 |
@@ -73,8 +89,9 @@ point anyone with a wrong bet there. After betting locks, bets are final.
 
 ## Other crew commands
 
-- `/review-ads`: approve or reject fake ads players send in. Anything you
-  approve shows on stream, so read it first.
+- `/review-ads`: approve or reject fake ads people send in, one at a time.
+  Every ad waits for this, crew ones too. "Approve and pin" brings an ad back
+  every 4th ad, like the Discord promo.
 - `/feature`: put a caster's bets on the stream layout.
 
 `/reset`, `/gift`, `/backup` and `/overlay-links` belong to the server host

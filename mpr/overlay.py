@@ -53,6 +53,8 @@ def public_url(page: str = "tote") -> str:
 
 # How long a settled bonus stays on screen so the casters can call it.
 BONUS_LINGER = 25
+# How long a closed, timed bonus stays on screen waiting for its payout.
+BONUS_WAITING = 180
 
 app = FastAPI(title="Mario Party Horse Racing overlay",
               docs_url=None, redoc_url=None, openapi_url=None)
@@ -88,8 +90,26 @@ def load_ads() -> dict:
             image_url = None
         slots.append({"id": a["id"], "headline": a["headline"], "body": a["body"],
                       "tag": a["tag"], "accent": a["accent"], "weight": a["weight"],
-                      "image_url": image_url})
-    return {"dwell_seconds": db.ad_dwell_seconds(), "slots": slots}
+                      "pinned": bool(a["pinned"]), "image_url": image_url})
+    return {"dwell_seconds": db.ad_dwell_seconds(), "slots": slots,
+            "sequence": ad_sequence(slots)}
+
+
+def ad_sequence(slots: list[dict]) -> list[dict]:
+    """The order the ad slot plays: pinned ads (the Discord promo) come back
+    every 4th ad, and everything else fills the gaps, weighted."""
+    pins = [s for s in slots if s["pinned"]]
+    others = [s for s in slots if not s["pinned"] for _ in range(max(1, s["weight"]))]
+    if not pins or not others:
+        return pins or others
+    if len(others) % 3:
+        others = others * 3            # a whole number of gaps, so the loop stays even
+    sequence = []
+    for k, ad in enumerate(others):
+        if k % 3 == 0:
+            sequence.append(pins[(k // 3) % len(pins)])
+        sequence.append(ad)
+    return sequence
 
 
 @app.get("/ads/uploaded/{ad_id}")
@@ -116,8 +136,12 @@ def current_race():
 def bonus_payload(race_id: int, meta: dict, now: float) -> dict | None:
     """The bonus to put on screen: an open one, or one just settled."""
     for m in db.bonus_markets(race_id):
-        live = m["result"] is None and m["status"] == "open" and now < (m["closes_at"] or 0)
-        waiting = m["result"] is None and not live
+        live = db.bonus_taking_bets(m, now)
+        # A timed bonus waiting for its payout stays up a few minutes. One left
+        # open "until betting locks" drops off once the race starts, instead
+        # of sitting on screen the whole game.
+        waiting = (m["result"] is None and not live and m["closes_at"] is not None
+                   and now - m["closes_at"] < BONUS_WAITING)
         recent = m["result"] is not None and now - (m["called_at"] or 0) < BONUS_LINGER
         if not (live or waiting or recent):
             continue
@@ -130,6 +154,8 @@ def bonus_payload(race_id: int, meta: dict, now: float) -> dict | None:
             "state": "open" if live else ("locked" if waiting else "settled"),
             "closes_at": m["closes_at"],
             "result": m["result"],
+            "winners": [] if m["result"] in (None, "VOID") else m["result"].split(" + "),
+            "until_lock": m["closes_at"] is None,
             "staked": staked,
             "tickets": db.market_tickets(m["id"]),
             "options": [

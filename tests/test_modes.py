@@ -161,7 +161,7 @@ def test_kart_panel_and_scorebug_talk_in_laps(fresh_db):
         return panel.sent[0]["content"]
 
     text = asyncio.run(go())
-    assert "Lap 0 of 3" in text
+    assert "Lap 1 of 3" in text                   # counting starts at lap 1
     from fastapi.testclient import TestClient
     from mpr import overlay
     race = TestClient(overlay.app).get("/state.json").json()["race"]

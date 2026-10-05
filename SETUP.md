@@ -291,7 +291,7 @@ names, pick from the suggestions that pop up.
     `Peach`, fourth `Yoshi`. You get a private reply ending "You have 90
     points left".
 
-54. Run `/prop` with market "Most coins at the end", pick `Peach`, amount
+54. Run `/sidebet` with market "Most coins at the end", pick `Peach`, amount
     `5`.
 
 Check the overlay in a normal browser first
@@ -344,12 +344,12 @@ Try the race tools
     choose "Restart". Wait for "Logged in" in the logs, then tap "Next turn"
     on the same panel. It should still work.
 
-62. Run `/bonus open` with question `Test bonus` and seconds `30`. A post with
-    answer buttons appears in Discord, and the bonus band slides up in OBS.
-    Tap "Mario", type `5`, and submit.
+62. Run `/bonus bet` with question `Test bonus`, type "Pick a character", and
+    timer "60 seconds". A post with answer buttons appears in Discord, and the
+    bonus band slides up in OBS. Tap "Mario", type `5`, and submit.
 
-63. Wait for the countdown to finish. The buttons grey out. Run `/bonus call`
-    with market `Test bonus` and winner `Mario`.
+63. Tap "Crew: Pay out" on the post and pick `Mario`. Everyone who backed
+    Mario is paid, and the post shows the result.
 
 64. Run `/race result` with first `Mario`, second `Luigi`, third `Peach`,
     fourth `Yoshi`, and coins `Peach`. That one command settles everything:
@@ -364,7 +364,7 @@ Try the race tools
 ## Part 7: Start the real season
 
 66. Run `/reset` with name `Season 1`, and click "Reset everything". Everyone
-    goes back to 100 points, and the test is filed away in `/season hall`.
+    goes back to 1,000 points, and the test is filed away in `/season hall`.
 
 67. You're live. Show night is four commands: `/race create`, `/show start`,
     `/show next` at each break, and `/race result` at the end. Crew can type
@@ -383,7 +383,7 @@ The README has the run of show. The one rule for Railway: **don't push code
 or config changes during a live show.** Every push redeploys, and the bot is
 offline for about a minute while it restarts.
 
-Ads are managed in Discord with `/ad add`, `/review-ads` and `/ad remove`, and
+Ads are managed in Discord with `/ad submit`, `/review-ads` and `/ad remove`, and
 change on stream within seconds. See the README's "Fake ads" section.
 
 To change the rundown, edit `config/show.json` on GitHub (the web editor is

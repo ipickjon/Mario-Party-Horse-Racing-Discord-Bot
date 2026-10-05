@@ -23,7 +23,8 @@
   }
   .slot {
     position: relative;
-    width: 1180px; height: 172px;
+    /* Fill whatever size the OBS source is, less a small margin. */
+    width: calc(100vw - 32px); height: calc(100vh - 32px);
     background: var(--enamel);
     border: 2px solid var(--rule);
     border-left: 10px solid var(--accent);
@@ -34,15 +35,36 @@
   }
   .slot[hidden] { display: none; }
 
-  .copy { padding: 20px 30px; max-width: 62ch; }
+  /* The copy uses the whole slot. Its width used to be set in "ch", which
+     follows the page's small base font, so long headlines wrapped into a
+     narrow column and spilled out of the slot. fit() below now shrinks the
+     text until it fits, and clamps as a last resort. */
+  .copy {
+    position: absolute; inset: 0;
+    padding: 16px 30px 16px 30px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  /* Centre with two spacers that shrink to nothing when space runs out, so
+     text that's too tall can only overflow downward, never off the top. */
+  .copy::before, .copy::after { content: ""; flex: 1 1 0; }
+  .copy.has-tag { padding-bottom: 42px; }      /* keep clear of the corner tag */
   .headline {
-    font-size: 50px; font-weight: 700; line-height: .98;
+    font-size: 50px; font-weight: 700; line-height: 1.0;
     color: var(--paper); margin: 0;
+    overflow-wrap: anywhere;
   }
   .body {
-    margin: 9px 0 0; font-size: 25px; font-weight: 500;
-    line-height: 1.22; color: var(--muted);
+    margin: 8px 0 0; font-size: 25px; font-weight: 500;
+    line-height: 1.2; color: var(--muted);
+    overflow-wrap: anywhere;
   }
+  .body[hidden] { display: none; }
+  .copy.clamped .headline, .copy.clamped .body {
+    display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .copy.clamped .headline { -webkit-line-clamp: 2; }
+  .copy.clamped .body { -webkit-line-clamp: 1; }
   .tag {
     position: absolute; right: 18px; bottom: 12px;
     padding: 3px 10px 2px; border-radius: 2px;
@@ -54,7 +76,8 @@
   /* image ads fill the slot instead */
   .shot {
     position: absolute; inset: 0;
-    width: 100%; height: 100%; object-fit: cover;
+    width: 100%; height: 100%; object-fit: contain;    /* whole image, never cropped */
+    background: var(--enamel);
   }
 
   /* dwell timer along the bottom edge */
@@ -85,6 +108,8 @@
 let slots = [], dwell = 12000, cursor = 0, timer = null;
 
 function expand(config) {
+  // The server works out the order, with pinned ads every 4th.
+  if (config.sequence && config.sequence.length) return config.sequence;
   // weight decides how often a slot comes up; default 1
   const out = [];
   for (const s of config.slots || []) {
@@ -112,6 +137,32 @@ async function poll() {
   }
 }
 
+// Shrink the text until it fits inside the slot, but never below a readable
+// size. If even that doesn't fit, clamp to two lines of headline and one of body.
+function fit() {
+  const copy = document.getElementById("copy");
+  const head = document.getElementById("headline");
+  const body = document.getElementById("body");
+  copy.classList.remove("clamped");
+  let size = 50;
+  const apply = () => {
+    head.style.fontSize = size + "px";
+    body.style.fontSize = Math.max(17, Math.round(size * 0.5)) + "px";
+  };
+  apply();
+  while (size > 26 && (copy.scrollHeight > copy.clientHeight + 1 ||
+                       head.scrollWidth > head.clientWidth + 1)) {
+    size -= 2;
+    apply();
+  }
+  if (copy.scrollHeight > copy.clientHeight + 1) copy.classList.add("clamped");
+}
+
+// The real font is narrower than the fallback, so measure again once it loads.
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => {
+  if (!document.getElementById("copy").hidden) fit();
+});
+
 function show() {
   const slot = document.getElementById("slot");
   if (!slots.length) { slot.hidden = true; return; }
@@ -135,6 +186,8 @@ function show() {
     body.hidden = !ad.body;
   }
   document.getElementById("tag").textContent = ad.tag || "";
+  copy.classList.toggle("has-tag", !!ad.tag);
+  if (!ad.image_url) fit();
 
   const bar = document.getElementById("timer");
   bar.classList.remove("run");

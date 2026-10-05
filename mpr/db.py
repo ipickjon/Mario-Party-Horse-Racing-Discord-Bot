@@ -38,12 +38,13 @@ PROP_KEYS = {
     "minigames": "Most minigames won",
     "coins": "Most coins at the end",
     "qtiles": "Most ? tiles stepped on",
+    "firststar": "First to get a star",
 }
 SLATE_KEY = "order"
 SLATE_LABEL = "Finishing order"
 # Props the bot can grade on its own from the live tally.
 TALLIED_PROPS = ("qtiles", "minigames")
-DEFAULT_TURNS = 35
+DEFAULT_TURNS = 20
 PALETTE = ["#e5453a", "#3fae5a", "#f4a43c", "#5b8dd9", "#b36ad6", "#e8d44d",
            "#4cc3c9", "#f07fb0", "#9c7a4f", "#8fd35f", "#6b7fe3", "#d9d9d9"]
 
@@ -52,7 +53,7 @@ PALETTE = ["#e5453a", "#3fae5a", "#f4a43c", "#5b8dd9", "#b36ad6", "#e8d44d",
 # run, and which version of /bet and /race result the server sees.
 MODES = {
     "party": {"label": "Mario Party", "runners": (4, 4), "props": True,
-              "turns": 35, "unit": "turn"},
+              "turns": 20, "unit": "turn"},
     "kart": {"label": "Mario Kart", "runners": (2, 12), "props": False,
              "turns": 3, "unit": "lap"},
 }
@@ -105,7 +106,7 @@ CREATE TABLE IF NOT EXISTS races (
     created_at      REAL    NOT NULL,
     locked_at       REAL,
     settled_at      REAL,
-    turn            INTEGER NOT NULL DEFAULT 0,
+    turn            INTEGER NOT NULL DEFAULT 1,
     total_turns     INTEGER NOT NULL DEFAULT 35,
     rundown         TEXT,
     segment         INTEGER NOT NULL DEFAULT -1,
@@ -136,6 +137,8 @@ CREATE TABLE IF NOT EXISTS markets (
     called_at   REAL,
     channel_id  INTEGER,
     message_id  INTEGER,
+    bonus_type  TEXT,
+    max_picks   INTEGER,
     UNIQUE (race_id, kind, key)
 );
 
@@ -148,7 +151,8 @@ CREATE TABLE IF NOT EXISTS bets (
     amount     INTEGER NOT NULL,
     placed_at  REAL    NOT NULL,
     payout     INTEGER,
-    settled    INTEGER NOT NULL DEFAULT 0
+    settled    INTEGER NOT NULL DEFAULT 0,
+    comeback   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_bets_market ON bets(market_id);
 CREATE INDEX IF NOT EXISTS idx_bets_user   ON bets(user_id);
@@ -213,7 +217,8 @@ CREATE TABLE IF NOT EXISTS ads (
     submitted_by   INTEGER,
     submitted_name TEXT    NOT NULL DEFAULT '',
     created_at     REAL    NOT NULL,
-    reviewed_by    INTEGER
+    reviewed_by    INTEGER,
+    pinned         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -237,7 +242,7 @@ CREATE TABLE IF NOT EXISTS events (
 _MIGRATIONS = {
     "races": {
         "season_id": "INTEGER",
-        "turn": "INTEGER NOT NULL DEFAULT 0",
+        "turn": "INTEGER NOT NULL DEFAULT 1",
         "total_turns": "INTEGER NOT NULL DEFAULT 35",
         "rundown": "TEXT",
         "segment": "INTEGER NOT NULL DEFAULT -1",
@@ -248,7 +253,10 @@ _MIGRATIONS = {
         "label": "TEXT", "options": "TEXT", "multiplier": "INTEGER",
         "opened_at": "REAL", "closes_at": "REAL", "called_at": "REAL",
         "channel_id": "INTEGER", "message_id": "INTEGER",
+        "bonus_type": "TEXT", "max_picks": "INTEGER",
     },
+    "bets": {"comeback": "INTEGER NOT NULL DEFAULT 0"},
+    "ads": {"pinned": "INTEGER NOT NULL DEFAULT 0"},
     "tallies": {"minigames": "INTEGER NOT NULL DEFAULT 0"},
     "wallets": {
         "featured": "INTEGER NOT NULL DEFAULT 0",
@@ -311,23 +319,33 @@ def _seed_ads_once():
     """Bring config/ads.json into the database the first time only. After
     that the rotation is managed with /ad commands, and removing every ad
     doesn't bring the samples back on the next restart."""
+    try:
+        slots = json.loads(ADS_FILE.read_text()).get("slots", [])
+    except (OSError, ValueError):
+        slots = []
     with connect() as conn:
+        if not conn.execute("SELECT 1 FROM meta WHERE key = 'ads_pinned'").fetchone():
+            # One-time update for servers seeded before pinning existed: pin
+            # the starting ads that ads.json marks as pinned (the Discord promo).
+            for slot in slots:
+                if slot.get("pinned"):
+                    conn.execute("""UPDATE ads SET pinned = 1
+                                     WHERE submitted_name = 'config/ads.json' AND headline = ?""",
+                                 (slot.get("headline") or slot.get("image"),))
+            conn.execute("INSERT INTO meta (key, value) VALUES ('ads_pinned', '1')")
         if conn.execute("SELECT 1 FROM meta WHERE key = 'ads_seeded'").fetchone():
             return
-        try:
-            slots = json.loads(ADS_FILE.read_text()).get("slots", [])
-        except (OSError, ValueError):
-            slots = []
         for slot in slots:
             if not (slot.get("headline") or slot.get("image")):
                 continue
             conn.execute(
                 """INSERT INTO ads (headline, body, tag, accent, weight, image_file,
-                                    status, submitted_name, created_at)
-                   VALUES (?,?,?,?,?,?, 'live', 'config/ads.json', ?)""",
+                                    status, submitted_name, created_at, pinned)
+                   VALUES (?,?,?,?,?,?, 'live', 'config/ads.json', ?, ?)""",
                 (slot.get("headline") or slot.get("image"), slot.get("body", ""),
                  slot.get("tag", ""), slot.get("accent", "#ffa81e"),
-                 max(1, min(10, int(slot.get("weight", 1)))), slot.get("image"), time.time()),
+                 max(1, min(10, int(slot.get("weight", 1)))), slot.get("image"), time.time(),
+                 1 if slot.get("pinned") else 0),
             )
         conn.execute("INSERT INTO meta (key, value) VALUES ('ads_seeded', '1')")
 
@@ -341,20 +359,28 @@ def ad_dwell_seconds() -> int:
 
 def add_ad(*, headline: str, body: str, tag: str, accent: str, weight: int, status: str,
            submitted_by: int | None, submitted_name: str,
-           image_blob: bytes | None = None, image_type: str | None = None) -> int:
+           image_blob: bytes | None = None, image_type: str | None = None,
+           pinned: bool = False) -> int:
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO ads (headline, body, tag, accent, weight, image_blob, image_type,
-                                status, submitted_by, submitted_name, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                status, submitted_by, submitted_name, created_at, pinned)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (headline, body, tag, accent, weight, image_blob, image_type, status,
-             submitted_by, submitted_name, time.time()),
+             submitted_by, submitted_name, time.time(), 1 if pinned else 0),
         )
         return cur.lastrowid
 
 
 _AD_COLUMNS = ("id, headline, body, tag, accent, weight, image_file, image_type, status, "
-               "submitted_by, submitted_name, created_at, image_blob IS NOT NULL AS has_upload")
+               "submitted_by, submitted_name, created_at, pinned, "
+               "image_blob IS NOT NULL AS has_upload")
+
+
+def set_pinned(ad_id: int, pinned: bool) -> bool:
+    with connect() as conn:
+        return conn.execute("UPDATE ads SET pinned = ? WHERE id = ?",
+                            (1 if pinned else 0, ad_id)).rowcount == 1
 
 
 def ad(ad_id: int) -> sqlite3.Row | None:
@@ -599,8 +625,8 @@ def create_race(
         ).fetchone()
         cur = conn.execute(
             """INSERT INTO races (guild_id, season_id, week_label, game, created_at,
-                                  total_turns, mode)
-               VALUES (?,?,?,?,?,?,?)""",
+                                  total_turns, mode, turn)
+               VALUES (?,?,?,?,?,?,?,1)""",
             (guild_id, season["id"] if season else None, week_label, game,
              time.time(), total_turns, mode),
         )
@@ -665,6 +691,15 @@ def set_race_status(race_id: int, status: str):
                     WHERE race_id = ? AND result IS NULL AND kind IN ('slate','prop')""",
                 (market_status, race_id),
             )
+            if status == "locked":
+                # Bonus bets left open "until betting locks" close with the board.
+                # (Opening the board never reopens a bonus.)
+                conn.execute(
+                    """UPDATE markets SET status = 'locked'
+                        WHERE race_id = ? AND kind = 'bonus' AND status = 'open'
+                          AND result IS NULL AND closes_at IS NULL""",
+                    (race_id,),
+                )
 
 
 def entrants(race_id: int) -> list[sqlite3.Row]:
@@ -719,6 +754,14 @@ def options_of(row) -> list[str]:
 # ------------------------------------------------------------------- bets
 
 
+def bonus_taking_bets(m, now: float | None = None) -> bool:
+    """A bonus is open until its timer runs out, or, with no timer, until
+    betting locks for the race."""
+    now = time.time() if now is None else now
+    return (m["result"] is None and m["status"] == "open"
+            and (m["closes_at"] is None or now < m["closes_at"]))
+
+
 def _is_accepting(m, now: float) -> bool:
     if m["status"] != "open" or m["result"] is not None:
         return False
@@ -747,6 +790,15 @@ def place_bet(
         ok, reason = economy.check_wager(balance, already, amount)
         if not ok:
             return False, reason
+        if m["kind"] == "bonus" and m["max_picks"]:
+            picked = {r["selection"] for r in conn.execute(
+                "SELECT DISTINCT selection FROM bets WHERE market_id = ? AND user_id = ?",
+                (market_id, user_id))}
+            if selection not in picked and len(picked) >= m["max_picks"]:
+                if m["max_picks"] == 1:
+                    return False, f"You've already backed {next(iter(picked))}. One side only on this one."
+                return False, (f"You can back at most {m['max_picks']} answers on this one, and "
+                               f"you've picked {', '.join(sorted(picked))}.")
         stored = json.dumps(selection) if m["kind"] == "slate" else selection
         cur = conn.execute(
             """INSERT INTO bets (race_id, market_id, user_id, selection, amount, placed_at)
@@ -865,6 +917,27 @@ def cancel_bet(user_id: int, bet_id: int) -> tuple[bool, str, dict | None]:
         conn.execute("DELETE FROM callouts WHERE bet_id = ?", (bet_id,))
         adjust_balance(conn, user_id, row["amount"], staked=-row["amount"])
         return True, "", _describe(row)
+
+
+def last_bet_id(user_id: int, market_id: int) -> int | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM bets WHERE user_id = ? AND market_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id, market_id),
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def all_bets(race_id: int) -> list[dict]:
+    """Every bet on a race, with who placed it, for /bets."""
+    with connect() as conn:
+        rows = conn.execute(
+            _BET_WITH_MARKET.replace("FROM bets b", ", COALESCE(w.display_name, '?') AS who "
+                                     "FROM bets b LEFT JOIN wallets w ON w.user_id = b.user_id")
+            + " WHERE b.race_id = ? ORDER BY m.id, b.id",
+            (race_id,),
+        ).fetchall()
+    return [dict(_describe(r), who=r["who"]) for r in rows]
 
 
 def market_totals(market_id: int) -> dict[str, int]:
@@ -987,8 +1060,9 @@ def settle_order(race_id: int, finish: list[str] | None) -> dict:
             "voided": finish is None, "tickets": len(tickets), "results": results}
 
 
-def call_market_id(market_id: int, winner: str | None) -> dict:
-    """Settle a single-pick market (a prop or a bonus) and pay it now."""
+def call_market_id(market_id: int, winner) -> dict:
+    """Settle a prop or a bonus and pay it now. winner is one answer, a list
+    of answers (a bonus with several winners), or None to void and refund."""
     m = market_by_id(market_id)
     if m is None:
         return {"error": "No such market."}
@@ -997,8 +1071,15 @@ def call_market_id(market_id: int, winner: str | None) -> dict:
     label = label_of(m)
     if m["result"] is not None:
         return {"error": f"{label} was already called."}
-    if winner is not None and winner not in options_of(m):
-        return {"error": f"{winner} isn't an option on {label}."}
+    winners = None if winner is None else ([winner] if isinstance(winner, str) else list(winner))
+    for w in winners or []:
+        if w not in options_of(m):
+            return {"error": f"{w} isn't an option on {label}."}
+    if m["kind"] == "bonus":
+        return _settle_bonus(m, winners)
+    if winners is not None and len(winners) != 1:
+        return {"error": "A side bet has exactly one winner."}
+    winner = None if winners is None else winners[0]
 
     with connect() as conn:
         conn.execute(
@@ -1080,7 +1161,8 @@ def auto_snapshot(label: str) -> Path | None:
 TIE = "tie"
 
 
-def settle_night(race_id: int, order: list[str], coins: str | None = None) -> dict:
+def settle_night(race_id: int, order: list[str], coins: str | None = None,
+                 first_star: str | None = None) -> dict:
     """The whole post-game in one go: settle the tallied props from the
     panel counts, the coins prop, and every order guess, then close the night.
 
@@ -1089,10 +1171,6 @@ def settle_night(race_id: int, order: list[str], coins: str | None = None) -> di
     r = race(race_id)
     if r is None or r["status"] == "settled":
         return {"error": "That race is already finished."}
-    waiting = [label_of(m) for m in bonus_markets(race_id, include_settled=False)]
-    if waiting:
-        return {"error": "Settle the bonus questions first, with /bonus call or /bonus void: "
-                         + ", ".join(waiting)}
     problem = check_order(race_id, order)
     if problem:
         return {"error": problem.replace("Guess the whole order", "Enter the whole order")}
@@ -1104,17 +1182,31 @@ def settle_night(race_id: int, order: list[str], coins: str | None = None) -> di
                              "Pick Tie if it was a tie."}
         if coins.lower() != TIE and coins not in options_of(coins_market):
             return {"error": f"{coins} isn't in this race."}
+    star_market = market(race_id, "prop", "firststar")
+    if first_star and star_market is not None and star_market["result"] is None \
+            and first_star not in options_of(star_market):
+        return {"error": f"{first_star} isn't in this race."}
 
     set_race_status(race_id, "locked")              # no late bets while paying out
+    # Bonus bets nobody settled ("first to land on the bank" that never
+    # happened) are refunded, so nobody loses points on something that didn't occur.
+    refunded = []
+    for m in bonus_markets(race_id, include_settled=False):
+        call_market_id(m["id"], None)
+        refunded.append(label_of(m))
     props = autograde(race_id)
     if needs_coins:
         props.append(call_market_id(coins_market["id"],
                                     None if coins.lower() == TIE else coins))
+    if star_market is not None and star_market["result"] is None:
+        # Usually settled from the control panel the moment it happens.
+        props.append(call_market_id(star_market["id"], first_star or None))
     order_summary = settle_order(race_id, order)
     closed = finish_race(race_id)
     if "error" in closed:                           # a prop was left open by hand
         return closed
-    return {"week": r["week_label"], "props": props, "order": order_summary, **closed}
+    return {"week": r["week_label"], "props": props, "order": order_summary,
+            "refunded_bonuses": refunded, **closed}
 
 
 def night_results(race_id: int, top: int = 5) -> dict | None:
@@ -1222,22 +1314,116 @@ def form(names: list[str], mode: str, guild_id: int | None = None) -> dict[str, 
 
 
 def open_bonus(
-    race_id: int, question: str, options: list[str], seconds: int, multiplier: int | None = None
+    race_id: int, question: str, options: list[str], seconds: int | None,
+    multiplier: int | None = None, bonus_type: str = "custom", max_picks: int | None = None,
 ) -> int:
-    """A quick mid-game market with its own clock, independent of the main board."""
+    """A bonus bet with its own clock. seconds=None keeps it open until
+    betting locks for the race, for "who'll be first to..." bets set up at
+    the start of the show. Several can run at once."""
     now = time.time()
     with connect() as conn:
         n = conn.execute(
             "SELECT COUNT(*) AS n FROM markets WHERE race_id = ? AND kind = 'bonus'", (race_id,)
         ).fetchone()["n"]
+        priced = [o for o in options if o != economy.DRAW]
         cur = conn.execute(
             """INSERT INTO markets
-                 (race_id, kind, key, status, label, options, multiplier, opened_at, closes_at)
-               VALUES (?, 'bonus', ?, 'open', ?, ?, ?, ?, ?)""",
+                 (race_id, kind, key, status, label, options, multiplier, opened_at, closes_at,
+                  bonus_type, max_picks)
+               VALUES (?, 'bonus', ?, 'open', ?, ?, ?, ?, ?, ?, ?)""",
             (race_id, f"b{n + 1}", question, json.dumps(options),
-             multiplier or economy.bonus_multiplier(len(options)), now, now + seconds),
+             multiplier or economy.bonus_multiplier(len(priced)), now,
+             None if seconds is None else now + seconds, bonus_type, max_picks),
         )
         return cur.lastrowid
+
+
+def bonus_price(m, selection: str) -> int:
+    if m["bonus_type"] == "minigame" and selection == economy.DRAW:
+        return economy.DRAW_MULTIPLIER
+    return m["multiplier"]
+
+
+def place_comeback(market_id: int, user_id: int, display_name: str, selection: str) -> tuple[bool, str]:
+    """A free pick on a minigame bet for someone with no points left.
+    One per person per minigame, worth COMEBACK_PRIZE if it lands."""
+    wallet(user_id, display_name)
+    with connect() as conn:
+        m = conn.execute("SELECT * FROM markets WHERE id = ?", (market_id,)).fetchone()
+        if m is None or not bonus_taking_bets(m):
+            return False, "That bonus is closed."
+        if m["bonus_type"] != "minigame":
+            return False, "Free picks are only on minigame bets."
+        balance = conn.execute("SELECT balance FROM wallets WHERE user_id = ?",
+                               (user_id,)).fetchone()["balance"]
+        if balance >= economy.MIN_WAGER:
+            return False, "You still have points, so this one's a normal bet."
+        if conn.execute("SELECT 1 FROM bets WHERE market_id = ? AND user_id = ? AND comeback = 1",
+                        (market_id, user_id)).fetchone():
+            return False, "You've already got your free pick on this one."
+        conn.execute(
+            """INSERT INTO bets (race_id, market_id, user_id, selection, amount, placed_at, comeback)
+               VALUES (?,?,?,?,0,?,1)""",
+            (m["race_id"], market_id, user_id, selection, time.time()),
+        )
+        return True, ""
+
+
+def close_bonus(market_id: int) -> bool:
+    """Stop taking bets now, before the timer runs out."""
+    with connect() as conn:
+        return conn.execute(
+            """UPDATE markets SET status = 'locked', closes_at = MIN(COALESCE(closes_at, ?), ?)
+                WHERE id = ? AND kind = 'bonus' AND result IS NULL""",
+            (time.time(), time.time(), market_id),
+        ).rowcount == 1
+
+
+def bonus_backers(market_id: int) -> dict[str, list[tuple[str, int, bool]]]:
+    """Who backed each answer: (name, stake, free pick) per answer."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT b.selection, b.amount, b.comeback, COALESCE(w.display_name, '?') AS name
+                 FROM bets b LEFT JOIN wallets w ON w.user_id = b.user_id
+                WHERE b.market_id = ? ORDER BY b.id""",
+            (market_id,),
+        ).fetchall()
+    out: dict[str, list] = {}
+    for r in rows:
+        out.setdefault(r["selection"], []).append((r["name"], r["amount"], bool(r["comeback"])))
+    return out
+
+
+def _settle_bonus(m, winners: list[str] | None) -> dict:
+    """Pay a bonus. Several winners are allowed (a 2 v 2 minigame); a draw
+    pays 8x on a minigame bet; a free comeback pick pays COMEBACK_PRIZE."""
+    label = label_of(m)
+    result = "VOID" if winners is None else " + ".join(winners)
+    with connect() as conn:
+        conn.execute(
+            """UPDATE markets SET result = ?, status = 'settled', called_at = ?,
+                                  closes_at = COALESCE(closes_at, ?) WHERE id = ?""",
+            (result, time.time(), time.time(), m["id"]),
+        )
+        bets = conn.execute(
+            "SELECT id, selection, amount, comeback FROM bets WHERE market_id = ? AND settled = 0",
+            (m["id"],),
+        ).fetchall()
+        payouts = {}
+        for b in bets:
+            if winners is None:
+                payouts[b["id"]] = b["amount"]                   # void: stake back
+            elif b["selection"] in winners:
+                payouts[b["id"]] = (economy.COMEBACK_PRIZE if b["comeback"]
+                                    else b["amount"] * bonus_price(m, b["selection"]))
+            else:
+                payouts[b["id"]] = 0
+        _apply(conn, payouts)
+    return {"label": label, "winner": None if winners is None else " and ".join(winners),
+            "winners_list": winners or [], "kind": "bonus", "voided": winners is None,
+            "tickets": len(bets),
+            "winners": 0 if winners is None else sum(1 for v in payouts.values() if v),
+            "paid": sum(payouts.values()), "multiplier": m["multiplier"]}
 
 
 def attach_message(market_id: int, channel_id: int, message_id: int):
@@ -1308,7 +1494,7 @@ def bump_tally(race_id: int, entrant: str, delta: int = 1, field: str = "qtiles"
 def bump_turn(race_id: int, delta: int = 1) -> int:
     with connect() as conn:
         r = conn.execute("SELECT turn, total_turns FROM races WHERE id = ?", (race_id,)).fetchone()
-        after = max(0, min(r["total_turns"], r["turn"] + delta))
+        after = max(1, min(r["total_turns"], r["turn"] + delta))   # turn 1 is the first
         if after != r["turn"]:
             conn.execute("UPDATE races SET turn = ? WHERE id = ?", (after, race_id))
             _log(conn, race_id, "turn", None, after - r["turn"])
@@ -1326,7 +1512,7 @@ def undo_last(race_id: int) -> dict | None:
         if ev is None:
             return None
         if ev["kind"] == "turn":
-            conn.execute("UPDATE races SET turn = MAX(0, turn - ?) WHERE id = ?",
+            conn.execute("UPDATE races SET turn = MAX(1, turn - ?) WHERE id = ?",
                          (ev["delta"], race_id))
         else:
             conn.execute(

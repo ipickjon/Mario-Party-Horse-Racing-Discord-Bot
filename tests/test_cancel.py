@@ -36,7 +36,7 @@ def test_cancel_refunds_in_full_and_leaves_no_trace(fresh_db):
         bot = await build_bot()
         await open_night(bot)
         placed = await run(bot, "bet", Interaction(**ANA), amount=40, **order(*FIELD))
-        assert "`/cancel` it before betting locks" in placed.text
+        assert "Undo it until betting locks" in placed.text
         bet_id = db.cancellable_bets(db.active_race(42)["id"], 20)[0]["id"]
 
         out = await run(bot, "cancel", Interaction(**ANA), bet=str(bet_id))
@@ -63,7 +63,7 @@ def test_change_a_bet_by_cancelling_and_betting_again(fresh_db):
         rid = db.active_race(42)["id"]
         await run(bot, "cancel", Interaction(**ANA), bet=str(db.cancellable_bets(rid, 20)[0]["id"]))
         again = await run(bot, "bet", Interaction(**ANA), amount=100, **order("Yoshi", "Peach", "Luigi", "Mario"))
-        assert "100 on **Yoshi > Peach > Luigi > Mario**" in again.text
+        assert "100 on 🟦 Yoshi › 🟧 Peach › 🟩 Luigi › 🟥 Mario" in again.text
         return [b["pick_text"] for b in db.cancellable_bets(rid, 20)]
 
     assert asyncio.run(go()) == ["Yoshi > Peach > Luigi > Mario"]
@@ -114,7 +114,7 @@ def test_cancel_all_and_the_picker(fresh_db):
         bot = await build_bot()
         await open_night(bot)
         await run(bot, "bet", Interaction(**ANA), amount=30, **order(*FIELD))
-        await run(bot, "prop", Interaction(**ANA), market="Most coins at the end", pick="Peach", amount=20)
+        await run(bot, "sidebet", Interaction(**ANA), market="Most coins at the end", pick="Peach", amount=20)
         picker = [c.name for c in await B.cancel_options(Interaction(**ANA), "")]
         assert picker[0] == "All 2 of my open bets"
         assert any("Peach (Most coins at the end)" in name for name in picker)

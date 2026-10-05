@@ -7,7 +7,7 @@ import discord
 from mpr import bot as B
 from tests.harness import Interaction, build_bot, run
 
-PLAYER_COMMANDS = {"bet", "prop", "payouts", "status", "wallet", "mybets", "board",
+PLAYER_COMMANDS = {"bet", "sidebet", "bets", "payouts", "status", "wallet", "mybets", "board",
                    "leaderboard", "season", "ad", "help", "cancel", "form"}
 CREW_COMMANDS = {"race", "show", "bonus", "panel", "tally", "railmoney", "feature", "review-ads"}
 HOST_COMMANDS = {"reset", "backup", "gift", "overlay-links"}
@@ -91,7 +91,7 @@ def test_status_follows_a_night_from_riding_to_results(fresh_db):
         assert "No bets. `/bet`" in empty.text and "betting open" in empty.text
 
         await run(bot, "bet", Interaction(**ANA), amount=40, **order("Mario", "Luigi", "Peach", "Yoshi"))
-        await run(bot, "prop", Interaction(**ANA), market="Most coins at the end", pick="Luigi", amount=10)
+        await run(bot, "sidebet", Interaction(**ANA), market="Most coins at the end", pick="Luigi", amount=10)
         await run(bot, "bet", Interaction(**ROB), amount=100, **order("Yoshi", "Peach", "Luigi", "Mario"))
         riding = await run(bot, "status", Interaction(**ANA))
         assert "Mario > Luigi > Peach > Yoshi" in riding.text and "riding" in riding.text
@@ -113,7 +113,7 @@ def test_status_follows_a_night_from_riding_to_results(fresh_db):
 def test_status_mentions_your_ads(fresh_db):
     async def go():
         bot = await build_bot()
-        await run(bot, "ad add", Interaction(**ANA), headline="Ana's pitch")
+        await run(bot, "ad submit", Interaction(**ANA), headline="Ana's pitch")
         return (await run(bot, "status", Interaction(**ANA))).text
 
     assert "Your ads: 1 waiting for review" in asyncio.run(go())

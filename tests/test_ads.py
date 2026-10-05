@@ -42,12 +42,18 @@ def live_headlines():
     return [s["headline"] for s in overlay.load_ads()["slots"]]
 
 
-def test_crew_ads_go_live_straight_away(fresh_db):
+def test_every_ad_waits_for_review_even_crew_ones(fresh_db):
+    """Each ad is approved on its own merits before it can air."""
+    db = fresh_db
+
     async def go():
         bot = await build_bot()
-        out = await run(bot, "ad add", Interaction(**CREW), headline="Crew special",
+        out = await run(bot, "ad submit", Interaction(**CREW), headline="Crew special",
                         body="From the booth", weight=4)
-        assert "in the rotation" in out.text and out.sent[0]["ephemeral"]
+        assert "review queue" in out.text and out.sent[0]["ephemeral"]
+        assert "Crew special" not in live_headlines()
+        review = await run(bot, "review-ads", Interaction(**CREW))
+        await click(review.sent[0]["view"], "Approve", Interaction(**CREW))
 
     asyncio.run(go())
     assert "Crew special" in live_headlines()
@@ -61,7 +67,7 @@ def test_viewer_ads_wait_for_the_crew_and_never_reach_the_stream_early(fresh_db)
 
     async def go():
         bot = await build_bot()
-        out = await run(bot, "ad add", Interaction(**ANA), headline="Ana's Kart Wash",
+        out = await run(bot, "ad submit", Interaction(**ANA), headline="Ana's Kart Wash",
                         image=upload, weight=9, tag="sneaky")
         assert "with the crew for review" in out.text
         assert not out.sent[0]["ephemeral"], "announced so the crew sees it come in"
@@ -80,8 +86,8 @@ def test_crew_review_approves_with_the_image_attached(fresh_db):
 
     async def go():
         bot = await build_bot()
-        await run(bot, "ad add", Interaction(**ANA), headline="Ana's Kart Wash", image=Upload(image))
-        await run(bot, "ad add", Interaction(**ROB), headline="Rob's Rides")
+        await run(bot, "ad submit", Interaction(**ANA), headline="Ana's Kart Wash", image=Upload(image))
+        await run(bot, "ad submit", Interaction(**ROB), headline="Rob's Rides")
 
         nosy = await run(bot, "review-ads", Interaction(**ANA))
         assert "for the crew" in nosy.text
@@ -112,12 +118,12 @@ def test_crew_review_approves_with_the_image_attached(fresh_db):
 def test_only_real_images_under_4mb_are_accepted(fresh_db):
     async def go():
         bot = await build_bot()
-        fake = await run(bot, "ad add", Interaction(**ANA), headline="Totally a picture",
+        fake = await run(bot, "ad submit", Interaction(**ANA), headline="Totally a picture",
                          image=Upload(b"MZ\x90\x00 not an image at all"))
         assert "isn't a PNG, JPG, GIF or WebP" in fake.text
 
         huge = Upload(png(), size=adrules.MAX_IMAGE_BYTES + 1)
-        big = await run(bot, "ad add", Interaction(**ANA), headline="Huge", image=huge)
+        big = await run(bot, "ad submit", Interaction(**ANA), headline="Huge", image=huge)
         assert "over 4 MB" in big.text and huge.reads == 0      # never downloaded
 
     asyncio.run(go())
@@ -135,11 +141,11 @@ def test_one_person_cant_flood_the_queue(fresh_db):
     async def go():
         bot = await build_bot()
         for i in range(adrules.MAX_PENDING_PER_PERSON):
-            await run(bot, "ad add", Interaction(**ANA), headline=f"Ad {i}")
-        extra = await run(bot, "ad add", Interaction(**ANA), headline="One more")
+            await run(bot, "ad submit", Interaction(**ANA), headline=f"Ad {i}")
+        extra = await run(bot, "ad submit", Interaction(**ANA), headline="One more")
         assert "already have 3 ads waiting" in extra.text
-        crew = await run(bot, "ad add", Interaction(**CREW), headline="Crew is never capped")
-        assert "in the rotation" in crew.text
+        crew = await run(bot, "ad submit", Interaction(**CREW), headline="Crew is never capped")
+        assert "review queue" in crew.text
 
     asyncio.run(go())
 
@@ -149,8 +155,8 @@ def test_who_can_remove_what(fresh_db):
 
     async def go():
         bot = await build_bot()
-        await run(bot, "ad add", Interaction(**ANA), headline="Ana's")
-        await run(bot, "ad add", Interaction(**ROB), headline="Rob's")
+        await run(bot, "ad submit", Interaction(**ANA), headline="Ana's")
+        await run(bot, "ad submit", Interaction(**ROB), headline="Rob's")
         ana_id = str(db.ads(submitted_by=20)[0]["id"])
         rob_id = str(db.ads(submitted_by=30)[0]["id"])
 
@@ -174,12 +180,12 @@ def test_text_is_cleaned_before_it_can_touch_the_layout(fresh_db):
 
     async def go():
         bot = await build_bot()
-        await run(bot, "ad add", Interaction(**CREW), headline="Line one\nline two\t\x07",
+        await run(bot, "ad submit", Interaction(**CREW), headline="Line one\nline two\t\x07",
                   body="x" * 500)
-        bad = await run(bot, "ad add", Interaction(**CREW), headline="Colour", accent="purple")
+        bad = await run(bot, "ad submit", Interaction(**CREW), headline="Colour", accent="purple")
         assert "hex code" in bad.text
-        ok = await run(bot, "ad add", Interaction(**CREW), headline="Colour", accent="5865F2")
-        assert "in the rotation" in ok.text
+        ok = await run(bot, "ad submit", Interaction(**CREW), headline="Colour", accent="5865F2")
+        assert "review queue" in ok.text
 
     asyncio.run(go())
     rows = {a["headline"]: a for a in db.ads()}
@@ -199,7 +205,7 @@ def test_the_sample_ads_are_imported_once_and_stay_gone_when_removed(fresh_db):
 def test_ad_list_shows_crew_the_queue_and_viewers_their_own(fresh_db):
     async def go():
         bot = await build_bot()
-        await run(bot, "ad add", Interaction(**ANA), headline="Ana's pitch")
+        await run(bot, "ad submit", Interaction(**ANA), headline="Ana's pitch")
         crew = await run(bot, "ad list", Interaction(**CREW))
         assert "In the rotation" in crew.text and "Waiting for review (1)" in crew.text
         viewer = await run(bot, "ad list", Interaction(**ANA))
@@ -212,11 +218,49 @@ def test_ad_list_shows_crew_the_queue_and_viewers_their_own(fresh_db):
 def test_uploaded_images_need_the_overlay_key_too(fresh_db, monkeypatch):
     async def go():
         bot = await build_bot()
-        await run(bot, "ad add", Interaction(**CREW), headline="Pic", image=Upload(png()))
+        await run(bot, "ad submit", Interaction(**CREW), headline="Pic", image=Upload(png()))
 
     asyncio.run(go())
+    fresh_db.approve_ad(fresh_db.ads(status="pending")[0]["id"], 10)
     monkeypatch.setattr(overlay, "OVERLAY_KEY", "k")
     url = next(s["image_url"] for s in overlay.load_ads()["slots"] if s["headline"] == "Pic")
     client = TestClient(overlay.app)
     assert client.get(url).status_code == 403
     assert client.get(url + "?key=k").status_code == 200
+
+
+def test_an_approved_submitter_still_gets_reviewed_next_time(fresh_db):
+    """The reported bug: after the first approval, later ads seemed to skip
+    review. Every submission must queue, whoever sent it and however many
+    of theirs were approved before."""
+    db = fresh_db
+
+    async def go():
+        bot = await build_bot()
+        await run(bot, "ad submit", Interaction(**ANA), headline="First")
+        review = await run(bot, "review-ads", Interaction(**CREW))
+        await click(review.sent[0]["view"], "Approve", Interaction(**CREW))
+        await run(bot, "ad submit", Interaction(**ANA), headline="Second")
+        await run(bot, "ad submit", Interaction(**CREW), headline="Crew's own")
+
+    asyncio.run(go())
+    assert "First" in live_headlines()
+    assert "Second" not in live_headlines() and "Crew's own" not in live_headlines()
+    assert {a["headline"] for a in db.ads(status="pending")} == {"Second", "Crew's own"}
+
+
+def test_approve_and_pin_brings_an_ad_back_every_fourth(fresh_db):
+    db = fresh_db
+
+    async def go():
+        bot = await build_bot()
+        await run(bot, "ad submit", Interaction(**ANA), headline="Ana's banner")
+        review = await run(bot, "review-ads", Interaction(**CREW))
+        done = await click(review.sent[0]["view"], "Approve and pin", Interaction(**CREW))
+        assert "every 4th ad" in edited_text(done)
+
+    asyncio.run(go())
+    sequence = [s["headline"] for s in overlay.load_ads()["sequence"]]
+    pinned = {"Join the Discord", "Ana's banner"}
+    assert all(h in pinned for h in sequence[::4])           # every 4th slot is a pinned ad
+    assert not any(h in pinned for i, h in enumerate(sequence) if i % 4)

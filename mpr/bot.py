@@ -33,6 +33,7 @@ DEFAULT_BONUS_STAKE = 100
 log = logging.getLogger("mpr")
 
 PROP_CHOICES = [
+    app_commands.Choice(name="First to get a star", value="prop:firststar"),
     app_commands.Choice(name="Most minigames won", value="prop:minigames"),
     app_commands.Choice(name="Most coins at the end", value="prop:coins"),
     app_commands.Choice(name="Most ? tiles stepped on", value="prop:qtiles"),
@@ -226,10 +227,15 @@ def panel_text(race_id: int) -> str:
     last5 = r["mode"] == "party" and r["total_turns"] - r["turn"] < 5 and r["turn"] > 0
     turn = f"{unit.capitalize()} {r['turn']} of {r['total_turns']}" + \
         (", last five turns" if last5 else "")
-    return (f"**{r['week_label']} control panel** — {turn}\n"
+    star = db.market(race_id, "prop", "firststar")
+    star_line = ""
+    if star is not None:
+        star_line = ("\nFirst star: " + (star["result"] if star["result"] not in (None, "VOID")
+                                          else "nobody yet, tap ★ when it happens"))
+    return (f"**{r['week_label']} control panel** — {turn}{star_line}\n"
             "```\n" + f"{'':<10} {'? tiles':>4} {'games':>6}\n" + "\n".join(rows) + "\n```"
             "Tap a character each time it happens. Undo reverses the last tap. "
-            "\\* marks the outright leader.")
+            "\\* marks the outright leader. 🎮 opens a 60-second bet on the next minigame.")
 
 
 def rundown_text(r) -> str:
@@ -298,24 +304,67 @@ def night_embed(week: str, finish: list[str] | None, guesses: list[dict],
     return embed
 
 
+SLOT_ICONS = ["🟥", "🟩", "🟧", "🟦", "🟪", "🟨"]   # match the overlay's runner colours
+
+
+def runner_icon(guild, name: str, slot: int | None) -> str:
+    """A server emoji named like the runner (":Mario:") if there is one,
+    otherwise a coloured square matching their colour on stream."""
+    key = re.sub(r"[^a-z0-9]", "", name.lower())
+    for emoji in getattr(guild, "emojis", None) or []:
+        if re.sub(r"[^a-z0-9]", "", emoji.name.lower()) == key:
+            return str(emoji)
+    if slot and 1 <= slot <= len(SLOT_ICONS):
+        return SLOT_ICONS[slot - 1]
+    return "▫️"
+
+
+def with_icons(guild, race_id: int, names: list[str]) -> str:
+    slots = {e["name"]: e["slot"] for e in db.entrants(race_id)}
+    return " › ".join(f"{runner_icon(guild, n, slots.get(n))} {n}" for n in names)
+
+
+def bonus_status(m) -> str:
+    if m["result"] is not None:
+        if m["result"] == "VOID":
+            return "voided, every stake refunded"
+        return f"**{m['result'].replace(' + ', ' and ')}** " + \
+            ("win" if " + " in m["result"] else "wins")
+    if db.bonus_taking_bets(m):
+        if m["closes_at"] is None:
+            return "open until betting locks for the race"
+        return f"closes <t:{int(m['closes_at'])}:R>"
+    return "betting closed, waiting for the result"
+
+
 def bonus_embed(m) -> discord.Embed:
     options = db.options_of(m)
-    totals = db.market_totals(m["id"])
-    staked = sum(totals.values())
-    if m["result"] is not None:
-        state = "voided, stakes refunded" if m["result"] == "VOID" else f"**{m['result']}** takes it"
-    elif m["status"] == "open" and time.time() < (m["closes_at"] or 0):
-        state = f"closes <t:{int(m['closes_at'])}:R>"
-    else:
-        state = "locked"
-    lines = [f"`{o:<12}` {totals.get(o, 0):>6,} in" for o in options]
+    backers = db.bonus_backers(m["id"])
+    staked = sum(a for rows in backers.values() for _, a, _ in rows)
+    lines = []
+    for o in options:
+        rows = backers.get(o, [])
+        total = sum(a for _, a, _ in rows)
+        price = db.bonus_price(m, o)
+        names = [f"{n} {a:,}" if not free else f"{n} (free pick)" for n, a, free in rows[:6]]
+        if len(rows) > 6:
+            names.append(f"+{len(rows) - 6} more")
+        who = ", ".join(names) if names else "nobody yet"
+        lines.append(f"**{o}** ({price}x) — {total:,} in: {who}")
+    rules = []
+    if m["max_picks"] == 1:
+        rules.append("Back one answer.")
+    elif m["max_picks"]:
+        rules.append(f"Back up to {m['max_picks']} answers.")
+    if m["bonus_type"] == "minigame":
+        rules.append(f"Out of points? Tap an answer for a free pick worth {economy.COMEBACK_PRIZE}.")
     embed = discord.Embed(
         title=f"Bonus: {m['label']}",
-        description=(f"Pays **{m['multiplier']}x**, {state}.\n"
-                     f"Tap an answer to bet. Default stake {DEFAULT_BONUS_STAKE}.\n\n"
-                     + "\n".join(lines) + f"\n\n{staked:,} {CURRENCY} down"),
-        color=0xFFA81E,
-    )
+        description=(f"Pays **{m['multiplier']}x**, {bonus_status(m)}.\n"
+                     + (" ".join(rules) + "\n" if rules else "")
+                     + f"Tap an answer to bet. Default stake {DEFAULT_BONUS_STAKE}.\n\n"
+                     + "\n".join(lines)[:3500] + f"\n\n{staked:,} {CURRENCY} down"),
+        color=0xFFA81E)
     embed.set_footer(text=DISCLAIMER)
     return embed
 
@@ -350,7 +399,7 @@ def status_embed(guild_id: int, user_id: int, display_name: str) -> discord.Embe
                  "settled": "finished"}.get(r["status"], r["status"])
         lines += ["", f"**{r['week_label']}** ({state})"]
         if not bets:
-            lines.append("No bets. `/bet` to guess the order, `/prop` for side bets."
+            lines.append("No bets. `/bet` to guess the order, `/sidebet` for side bets."
                          if r["status"] == "open" else "You didn't bet on this one.")
         for b in bets:
             label = b["label"] or db.market_label(b["kind"], b["key"])
@@ -405,39 +454,33 @@ def submit_bonus_stake(user_id: int, display_name: str, market_id: int,
 
 
 def bonus_stake(user_id: int, display_name: str, market_id: int,
-                option_index: int, raw_amount: str) -> tuple[str, str]:
-    """(reply for the viewer, public callout or '')."""
-    text, callout = _bonus_stake(user_id, display_name, market_id, option_index, raw_amount)
-    return text, callout
-
-
-def _bonus_stake(user_id: int, display_name: str, market_id: int,
-                 option_index: int, raw_amount: str) -> tuple[str, str]:
+                option_index: int, raw_amount: str) -> tuple[str, str, int | None]:
+    """(reply for the viewer, public callout or '', the new bet's id or None)."""
     m = db.market_by_id(market_id)
     if m is None:
-        return "That bonus is gone.", ""
+        return "That bonus is gone.", "", None
     options = db.options_of(m)
     if not 0 <= option_index < len(options):
-        return "That answer isn't on this bonus.", ""
+        return "That answer isn't on this bonus.", "", None
     try:
         amount = int(str(raw_amount).replace(",", "").strip())
     except ValueError:
-        return "Whole points only.", ""
+        return "Whole points only.", "", None
     db.wallet(user_id, display_name)
     pick = options[option_index]
     ok, why = db.place_bet(m["race_id"], market_id, user_id, pick, amount)
     if not ok:
-        return why, ""
+        return why, "", None
     left = db.wallet(user_id)["balance"]
-    return (f"{amount:,} on **{pick}**. Pays {m['multiplier']}x if right. "
-            f"{left:,} {CURRENCY} left."), why
+    return (f"{amount:,} on **{pick}**. Pays {db.bonus_price(m, pick)}x if right. "
+            f"{left:,} {CURRENCY} left."), why, db.last_bet_id(user_id, market_id)
 
 
 # ----------------------------------------------------------------- buttons
 
 
 class TallyButton(discord.ui.DynamicItem[discord.ui.Button],
-                  template=r"mpr:t:(?P<race>\d+):(?P<what>qt|mg|tn|ud):(?P<arg>-?\d+)"):
+                  template=r"mpr:t:(?P<race>\d+):(?P<what>qt|mg|tn|ud|st|mb):(?P<arg>-?\d+)"):
     """Control panel button. The custom id carries everything it needs, so
     the panel keeps working after the bot restarts."""
 
@@ -459,6 +502,28 @@ class TallyButton(discord.ui.DynamicItem[discord.ui.Button],
         return False
 
     async def callback(self, interaction: discord.Interaction):
+        if self.what == "mb":
+            r = db.active_race(interaction.guild_id)
+            if r is None or r["id"] != self.race_id:
+                await interaction.response.send_message(
+                    "This panel is for an old race. Run /panel again.", ephemeral=True)
+                return
+            names = [e["name"] for e in db.entrants(self.race_id)]
+            await open_bonus_post(interaction, self.race_id, "Who wins this minigame?",
+                                  "minigame", names + [economy.DRAW], 60)
+            return
+        if self.what == "st":
+            e = db.entrant_by_slot(self.race_id, self.arg)
+            out = db.call_market(self.race_id, "prop", "firststar", e["name"])
+            if "error" in out:
+                await interaction.response.send_message(out["error"], ephemeral=True)
+                return
+            await interaction.response.edit_message(content=panel_text(self.race_id),
+                                                    view=panel_view(self.race_id))
+            await interaction.followup.send(
+                f"⭐ **First star: {e['name']}!** {out['winners']} of {out['tickets']} "
+                f"side bets cashed, {out['paid']:,} {CURRENCY} paid out.")
+            return
         note = apply_tally(self.race_id, self.what, self.arg, interaction.guild_id)
         if note.startswith("This panel"):
             await interaction.response.send_message(note, ephemeral=True)
@@ -484,6 +549,48 @@ def panel_view(race_id: int) -> discord.ui.View:
     view.add_item(TallyButton(race_id, "tn", -1, f"{unit.capitalize()} back",
                               discord.ButtonStyle.secondary, row=2))
     view.add_item(TallyButton(race_id, "ud", 0, "Undo last", discord.ButtonStyle.danger, row=2))
+    star = db.market(race_id, "prop", "firststar")
+    if star is not None and len(ents) <= 4:
+        if star["result"] is None:
+            for e in ents:
+                view.add_item(TallyButton(race_id, "st", e["slot"], f"★ {e['name']}",
+                                          discord.ButtonStyle.secondary, row=3))
+        view.add_item(TallyButton(race_id, "mb", 0, "🎮 Minigame bet",
+                                  discord.ButtonStyle.success, row=3))
+    return view
+
+
+class UndoButton(discord.ui.DynamicItem[discord.ui.Button],
+                 template=r"mpr:undo:(?P<bet>\d+)"):
+    """On every bet confirmation: take the bet back while betting's open."""
+
+    def __init__(self, bet_id: int):
+        super().__init__(discord.ui.Button(label="Undo this bet", style=discord.ButtonStyle.secondary,
+                                           custom_id=f"mpr:undo:{bet_id}"))
+        self.bet_id = bet_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str]):
+        return cls(int(match["bet"]))
+
+    async def callback(self, interaction: discord.Interaction):
+        ok, why, info = db.cancel_bet(interaction.user.id, self.bet_id)
+        if not ok:
+            await interaction.response.send_message(why, ephemeral=True)
+            return
+        balance = db.wallet(interaction.user.id)["balance"]
+        await interaction.response.edit_message(
+            content=f"Taken back: {info['amount']:,} on {info['pick_text']} ({info['label']}). "
+                    f"You have {balance:,} {CURRENCY}.", view=None)
+        if info["kind"] == "bonus":
+            await refresh_bonus_post(interaction.client, info["market_id"])
+
+
+def undo_view(bet_id: int | None) -> discord.ui.View | None:
+    if bet_id is None:
+        return None
+    view = discord.ui.View(timeout=None)
+    view.add_item(UndoButton(bet_id))
     return view
 
 
@@ -496,9 +603,12 @@ class BonusStakeModal(discord.ui.Modal):
         self.add_item(self.amount)
 
     async def on_submit(self, interaction: discord.Interaction):
-        text, callout = bonus_stake(interaction.user.id, interaction.user.display_name,
-                                    self.market_id, self.option_index, self.amount.value)
-        await interaction.response.send_message(text, ephemeral=True)
+        text, callout, bet_id = bonus_stake(interaction.user.id, interaction.user.display_name,
+                                            self.market_id, self.option_index, self.amount.value)
+        await interaction.response.send_message(text, ephemeral=True,
+                                                **({"view": undo_view(bet_id)} if bet_id else {}))
+        await refresh_bonus_post(getattr(interaction, "client", None), self.market_id,
+                                 getattr(interaction, "message", None))
         if callout:
             await interaction.followup.send(callout)
 
@@ -508,7 +618,7 @@ class BonusButton(discord.ui.DynamicItem[discord.ui.Button],
     def __init__(self, market_id: int, idx: int, label: str = "·"):
         super().__init__(discord.ui.Button(
             label=label[:80], style=discord.ButtonStyle.primary,
-            custom_id=f"mpr:b:{market_id}:{idx}", row=idx // 5))
+            custom_id=f"mpr:b:{market_id}:{idx}", row=min(3, idx // 5)))
         self.market_id, self.idx = market_id, idx
 
     @classmethod
@@ -517,21 +627,160 @@ class BonusButton(discord.ui.DynamicItem[discord.ui.Button],
 
     async def callback(self, interaction: discord.Interaction):
         m = db.market_by_id(self.market_id)
-        if m is None or m["result"] is not None or m["status"] != "open" \
-                or time.time() >= (m["closes_at"] or 0):
+        if m is None or not db.bonus_taking_bets(m):
             await interaction.response.send_message("That bonus is closed.", ephemeral=True)
             return
         option = db.options_of(m)[self.idx]
+        balance = db.wallet(interaction.user.id, interaction.user.display_name)["balance"]
+        if balance < economy.MIN_WAGER:
+            # The comeback: a broke player still gets a free pick on minigame bets.
+            ok, why = db.place_comeback(self.market_id, interaction.user.id,
+                                        interaction.user.display_name, option)
+            msg = (f"You're out of points, so this one's free: **{option}**. If it lands you get "
+                   f"{economy.COMEBACK_PRIZE} {CURRENCY} to get back in." if ok else
+                   why if m["bonus_type"] == "minigame" else
+                   "You're out of points. Minigame bets give you a free pick, so wait for the next one.")
+            await interaction.response.send_message(msg, ephemeral=True)
+            if ok:
+                await refresh_bonus_post(getattr(interaction, "client", None), self.market_id,
+                                         getattr(interaction, "message", None))
+            return
         await interaction.response.send_modal(BonusStakeModal(self.market_id, self.idx, option))
 
 
-def bonus_view(market_id: int, disabled: bool = False) -> discord.ui.View:
+class BonusCrewButton(discord.ui.DynamicItem[discord.ui.Button],
+                      template=r"mpr:bc:(?P<market>\d+):(?P<action>close|pay|del)"):
+    """The crew's row on every bonus post: close early, pay out, delete."""
+
+    LABELS = {"close": ("Close now", discord.ButtonStyle.secondary),
+              "pay": ("Pay out", discord.ButtonStyle.success),
+              "del": ("Delete", discord.ButtonStyle.danger)}
+
+    def __init__(self, market_id: int, action: str, disabled: bool = False):
+        label, style = self.LABELS[action]
+        button = discord.ui.Button(label=f"Crew: {label}", style=style, row=4,
+                                   custom_id=f"mpr:bc:{market_id}:{action}", disabled=disabled)
+        super().__init__(button)
+        self.market_id, self.action = market_id, action
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str]):
+        return cls(int(match["market"]), match["action"])
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if is_staff(interaction.user):
+            return True
+        await interaction.response.send_message("Crew only.", ephemeral=True)
+        return False
+
+    async def callback(self, interaction: discord.Interaction):
+        m = db.market_by_id(self.market_id)
+        if m is None or m["result"] is not None:
+            await interaction.response.send_message("That bonus is already settled.", ephemeral=True)
+            return
+        if self.action == "close":
+            db.close_bonus(self.market_id)
+            m = db.market_by_id(self.market_id)
+            await interaction.response.edit_message(embed=bonus_embed(m),
+                                                    view=bonus_view(self.market_id))
+        elif self.action == "pay":
+            db.close_bonus(self.market_id)               # paying out closes betting first
+            await interaction.response.send_message(
+                f"Who won **{m['label']}**?", view=PayoutPicker(self.market_id), ephemeral=True)
+            await refresh_bonus_post(getattr(interaction, "client", None), self.market_id,
+                                     getattr(interaction, "message", None))
+        else:
+            out = db.call_market_id(self.market_id, None)
+            await interaction.response.send_message(
+                f"Deleted **{m['label']}**. {out['tickets']} bets refunded.", ephemeral=True)
+            try:
+                await interaction.message.delete()
+            except (discord.HTTPException, AttributeError):
+                pass
+
+
+VOID_PICK = "__void__"
+
+
+class PayoutPicker(discord.ui.View):
+    """Pick the winner (or two, for a 2 v 2 minigame) and pay out."""
+
+    def __init__(self, market_id: int):
+        super().__init__(timeout=300)
+        self.market_id = market_id
+        m = db.market_by_id(market_id)
+        options = db.options_of(m)
+        most = 2 if (m["max_picks"] or 1) >= 2 and len(options) > 2 else 1
+        choices = [discord.SelectOption(label=o[:100], value=o) for o in options[:24]]
+        choices.append(discord.SelectOption(label="Nobody: refund everyone", value=VOID_PICK))
+        self.pick = discord.ui.Select(placeholder="Winner" + (" (or two winners for 2 v 2)" if most == 2 else ""),
+                                      min_values=1, max_values=most, options=choices)
+        self.pick.callback = self.chosen
+        self.add_item(self.pick)
+
+    async def chosen(self, interaction: discord.Interaction):
+        values = list(self.pick.values)
+        winners = None if VOID_PICK in values else values
+        out = db.call_market_id(self.market_id, winners)
+        if "error" in out:
+            await interaction.response.edit_message(content=out["error"], view=None)
+            return
+        await interaction.response.edit_message(content="Paid out.", view=None)
+        await refresh_bonus_post(getattr(interaction, "client", None), self.market_id)
+        await interaction.followup.send(call_text(out))
+
+
+def bonus_view(market_id: int, disabled: bool | None = None) -> discord.ui.View:
+    m = db.market_by_id(market_id)
+    closed = not db.bonus_taking_bets(m) if disabled is None else disabled
+    settled = m["result"] is not None
     view = discord.ui.View(timeout=None)
-    for i, option in enumerate(db.options_of(db.market_by_id(market_id))):
+    for i, option in enumerate(db.options_of(m)[:20]):
         item = BonusButton(market_id, i, option)
-        item.item.disabled = disabled
+        item.item.disabled = closed
         view.add_item(item)
+    if not settled:
+        view.add_item(BonusCrewButton(market_id, "close", disabled=closed))
+        view.add_item(BonusCrewButton(market_id, "pay"))
+        view.add_item(BonusCrewButton(market_id, "del"))
     return view
+
+
+async def refresh_bonus_post(client, market_id: int, message=None):
+    """Bring the bonus post up to date: who's in, whether it's open, the result."""
+    m = db.market_by_id(market_id)
+    if m is None:
+        return
+    try:
+        if message is None and client is not None and m["channel_id"] and m["message_id"]:
+            channel = client.get_channel(m["channel_id"]) or await client.fetch_channel(m["channel_id"])
+            message = channel.get_partial_message(m["message_id"])
+        if message is not None:
+            await message.edit(embed=bonus_embed(m), view=bonus_view(market_id))
+    except (discord.HTTPException, AttributeError):
+        pass       # post deleted, or no access; the bet itself already went through
+
+
+async def close_later(client, market_id: int, seconds: int):
+    await asyncio.sleep(seconds)
+    db.lock_expired_bonuses()
+    await refresh_bonus_post(client, market_id)
+
+
+async def open_bonus_post(interaction: discord.Interaction, race_id: int, question: str,
+                          bonus_type: str, answers: list[str], seconds: int | None,
+                          pays: int | None = None):
+    rules = economy.BONUS_TYPES.get(bonus_type, {"max_picks": 1})
+    market_id = db.open_bonus(race_id, question, answers, seconds, pays, bonus_type,
+                              rules["max_picks"])
+    await interaction.response.send_message(embed=bonus_embed(db.market_by_id(market_id)),
+                                            view=bonus_view(market_id))
+    message = await interaction.original_response()
+    db.attach_message(market_id, message.channel.id, message.id)
+    client = getattr(interaction, "client", None)
+    if seconds is not None and client is not None and hasattr(client, "spawn"):
+        client.spawn(close_later(client, market_id, seconds))
+    return market_id
 
 
 # --------------------------------------------------------------------- bot
@@ -610,7 +859,7 @@ class HorseRace(commands.Bot):
     async def setup_hook(self):
         db.init()
         db.lock_expired_bonuses()
-        self.add_dynamic_items(TallyButton, BonusButton)
+        self.add_dynamic_items(TallyButton, BonusButton, BonusCrewButton, UndoButton)
         for cog in COGS:
             await self.add_cog(cog(self))
         self.spawn(overlay.serve())
@@ -659,25 +908,32 @@ async def place_guess(interaction: discord.Interaction, amount: int, order: list
     callout = reason
     n = len(order)
     balance = db.wallet(interaction.user.id)["balance"]
+    guild = getattr(interaction, "guild", None)
+    bet_id = db.last_bet_id(interaction.user.id, db.slate_market(r["id"])["id"])
     await interaction.response.send_message(
-        f"{amount:,} on **{' > '.join(order)}**.\n"
+        f"{amount:,} on {with_icons(guild, r['id'], order)}.\n"
         f"Get all {n} right and it comes back as {amount * economy.slate_multiplier(n):,}. "
         f"{ladder_line(n).capitalize()}.\nYou have {balance:,} {CURRENCY} left. "
-        "Changed your mind? `/cancel` it before betting locks.",
-        ephemeral=True)
-    if callout:
-        await interaction.followup.send(callout)
+        "Changed your mind? Undo it until betting locks.",
+        ephemeral=True, view=undo_view(bet_id))
+    # Everyone sees who's backing what; a big bet gets the louder callout instead.
+    await interaction.followup.send(
+        callout or f"**{interaction.user.display_name}** bet {amount:,}: "
+                   f"{with_icons(guild, r['id'], order)}")
 
 
 async def settle_result(interaction: discord.Interaction, order: list[str],
-                        coins: str | None = None):
+                        coins: str | None = None, first_star: str | None = None):
     """The whole post-game: tallied props, coins, every guess, close the night."""
     r = require_race(interaction.guild_id)
-    out = db.settle_night(r["id"], order, coins)
+    out = db.settle_night(r["id"], order, coins, first_star)
     if "error" in out:
         raise Refusal(out["error"])
-    await interaction.response.send_message(
-        embed=night_embed(out["week"], out["finish"], out["guesses"], out["props"]))
+    embed = night_embed(out["week"], out["finish"], out["guesses"], out["props"])
+    if out.get("refunded_bonuses"):
+        embed.add_field(name="Refunded, never settled", inline=False,
+                        value=", ".join(out["refunded_bonuses"])[:1000])
+    await interaction.response.send_message(embed=embed)
 
 
 async def coins_options(interaction: discord.Interaction, current: str):
@@ -717,12 +973,15 @@ async def bet_kart(interaction: discord.Interaction, amount: int,
 
 @app_commands.command(name="result", description=RESULT_HELP)
 @app_commands.describe(coins="Who had the most coins when the race ended. Pick Tie for a tie",
+                       first_star="Only if you didn't tap ★ on the panel: who got the first star",
                        **{p: PLACE_HELP[p] for p in PARTY_PLACES})
-@app_commands.autocomplete(coins=coins_options, **{p: entrant_options for p in PARTY_PLACES})
+@app_commands.autocomplete(coins=coins_options, first_star=entrant_options,
+                           **{p: entrant_options for p in PARTY_PLACES})
 @staff_only()
 async def result_party(interaction: discord.Interaction,
-                       first: str, second: str, third: str, fourth: str, coins: str):
-    await settle_result(interaction, [first, second, third, fourth], coins)
+                       first: str, second: str, third: str, fourth: str, coins: str,
+                       first_star: str | None = None):
+    await settle_result(interaction, [first, second, third, fourth], coins, first_star)
 
 
 @app_commands.command(name="result", description=RESULT_HELP)
@@ -783,22 +1042,25 @@ class Betting(commands.Cog):
             lines.append(f"Took back {info['amount']:,} on {info['pick_text']} ({info['label']}).")
         balance = db.wallet(interaction.user.id)["balance"]
         lines.append(f"{refunded:,} {CURRENCY} back, you have {balance:,}. "
-                     "`/bet` or `/prop` to place a new one.")
+                     "`/bet` or `/sidebet` to place a new one.")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-    @app_commands.command(description="Side bet on a prop: minigames, coins, or ? tiles.")
-    @app_commands.describe(market="Which prop", pick="Which character",
+    @app_commands.command(name="sidebet",
+                          description="Side bet: first star, most minigames, most coins, or most ? tiles.")
+    @app_commands.describe(market="Which side bet", pick="Which character",
                            amount=f"How many {CURRENCY} to stake")
     @app_commands.choices(market=PROP_CHOICES)
     @app_commands.autocomplete(pick=entrant_options)
-    async def prop(self, interaction: discord.Interaction,
-                   market: app_commands.Choice[str], pick: str, amount: int):
+    async def sidebet(self, interaction: discord.Interaction,
+                      market: app_commands.Choice[str], pick: str, amount: int):
         r = require_race(interaction.guild_id)
         db.wallet(interaction.user.id, interaction.user.display_name)
         _, key = split_market(market.value)
         m = db.market(r["id"], "prop", key)
         if m is None:
-            raise Refusal("Tonight's race has no props.")
+            raise Refusal("Tonight's race has no side bets.")
+        if m["result"] is not None:
+            raise Refusal(f"{db.label_of(m)} is already settled.")
         names = db.options_of(m)
         if pick not in names:
             raise Refusal(f"{pick} isn't in this race. Tonight: {', '.join(names)}.")
@@ -807,12 +1069,42 @@ class Betting(commands.Cog):
             raise Refusal(reason)
         callout = reason
         balance = db.wallet(interaction.user.id)["balance"]
+        guild = getattr(interaction, "guild", None)
+        slot = next((e["slot"] for e in db.entrants(r["id"]) if e["name"] == pick), None)
+        icon = runner_icon(guild, pick, slot)
         await interaction.response.send_message(
-            f"{amount:,} on **{pick}** — {market.name}. Pays {economy.PROP_MULTIPLIER}x "
-            f"if you're right.\nYou have {balance:,} {CURRENCY} left. "
-            "`/cancel` takes it back until betting locks.", ephemeral=True)
-        if callout:
-            await interaction.followup.send(callout)
+            f"{amount:,} on {icon} **{pick}**, {market.name.lower()}. Pays "
+            f"{economy.PROP_MULTIPLIER}x if you're right.\nYou have {balance:,} {CURRENCY} left.",
+            ephemeral=True, view=undo_view(db.last_bet_id(interaction.user.id, m["id"])))
+        await interaction.followup.send(
+            callout or f"**{interaction.user.display_name}** bet {amount:,} on {icon} {pick}, "
+                       f"{market.name.lower()}.")
+
+    @app_commands.command(description="Everyone's bets on tonight's race: who's backing what.")
+    async def bets(self, interaction: discord.Interaction):
+        r = db.active_race(interaction.guild_id) or db.latest_race(interaction.guild_id)
+        if r is None:
+            raise Refusal("No race yet.")
+        rows = db.all_bets(r["id"])
+        if not rows:
+            raise Refusal("No bets yet. `/bet` to be the first.")
+        guild = getattr(interaction, "guild", None)
+        slots = {e["name"]: e["slot"] for e in db.entrants(r["id"])}
+        sections: dict[str, list[str]] = {}
+        for b in rows:
+            if b["kind"] == "slate":
+                pick = with_icons(guild, r["id"], b["selection"])
+            else:
+                pick = f"{runner_icon(guild, b['selection'], slots.get(b['selection']))} {b['selection']}"
+            amount = "free pick" if b.get("comeback") else f"{b['amount']:,}"
+            sections.setdefault(b["label"], []).append(f"**{b['who']}** {amount}: {pick}")
+        embed = discord.Embed(title=f"Bets on {r['week_label']}", color=0x1E7A46)
+        for label, lines in list(sections.items())[:24]:
+            text = "\n".join(lines)
+            embed.add_field(name=label, value=text[:1000] + ("\n..." if len(text) > 1000 else ""),
+                            inline=False)
+        embed.set_footer(text=DISCLAIMER)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(description="How tonight's runners have finished in past races.")
     async def form(self, interaction: discord.Interaction):
@@ -844,7 +1136,7 @@ class Betting(commands.Cog):
                 f"`/bet`. You get your stake back multiplied by how many places you got right. "
                 f"Spend {example} and get all {n} right: {example * economy.slate_multiplier(n):,}. "
                 f"Get none right and the stake is gone.\n\n{rows}\n\n"
-                f"**Props.** `/prop` on most minigames, most coins, or most ? tiles. "
+                f"**Side bets.** `/sidebet` on first star, most minigames, most coins, or most ? tiles. "
                 f"Pays {economy.PROP_MULTIPLIER}x. Minigames goes to whoever won the most "
                 "minigames. Coins goes to whoever has the most coins when the race ends. "
                 "The game's own bonus stars don't decide these. A tie refunds the bet.\n\n"
@@ -868,22 +1160,27 @@ class Betting(commands.Cog):
             "Guess the finishing order with `/bet` and put points on it. You get your "
             "stake back times the number of places you got right.\n\n"
             "`/status` your points, place and tonight's bets\n"
-            "`/bet` guess the order  ·  `/prop` side bets  ·  `/payouts` how it pays\n"
-            "`/cancel` take a bet back while betting's still open\n"
-            "`/form` how tonight's runners have finished before\n"
-            "`/leaderboard` standings  ·  `/ad add` send in a fake ad for the stream\n"
-            "Bonus questions pop up during the race: tap an answer on the post."))
+            "`/bet` guess the order  ·  `/sidebet` first star, minigames, coins, ? tiles\n"
+            "`/bets` everyone's bets  ·  `/form` how the runners have done before\n"
+            "`/leaderboard` standings  ·  `/payouts` how it pays\n"
+            "`/ad submit` send in a fake ad for the stream\n\n"
+            "Every bet slip has an **Undo** button until betting locks. Bonus bets pop up "
+            "during the race: tap an answer on the post. Out of points? Minigame bets "
+            f"give you a free pick worth {economy.COMEBACK_PRIZE}."))
         if is_staff(interaction.user):
             embed.add_field(name="Crew: show night", inline=False, value=(
                 "1. `/race create`: mode, week, runners. Any time before the show.\n"
-                "2. `/show start` when you go live. Betting opens.\n"
+                "2. `/show start` when you go live. Betting opens. Optional: `/bonus bet` "
+                "with timer \"Until betting locks\" for first-to-the-bank style bets.\n"
                 "3. `/show next` at each break. The race segment locks betting and posts "
-                "the control panel: tap it for every ? tile, minigame win and turn.\n"
-                "4. `/bonus open` for mid-race questions, `/bonus call` when they're done.\n"
-                "5. `/race result`: the order and coins. Settles everything and posts the "
-                "standings.\n\n"
-                "Mistakes: Undo on the panel, `/race void` refunds a market, "
-                "`/bonus void` refunds a bonus. `/review-ads` for ads people send in."))
+                "the control panel: tap it for ? tiles, minigame wins, turns, ★ first star, "
+                "and 🎮 to open a 60-second minigame bet.\n"
+                "4. `/bonus bet` any time for a quick question. Settle it with the "
+                "**Pay out** button on the post.\n"
+                "5. `/race result`: the order and coins. Settles everything, refunds bonus "
+                "bets nobody settled, posts the standings.\n\n"
+                "Mistakes: Undo on the panel, **Delete** on a bonus post, `/race void` "
+                "refunds a side bet. `/review-ads` for ads people send in."))
         embed.set_footer(text=DISCLAIMER)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -926,6 +1223,10 @@ class Betting(commands.Cog):
             raise Refusal("Nobody has a wallet yet.")
         lines = [f"`{i:>2}.` **{x['display_name'] or x['user_id']}** — {x['balance']:,}"
                  for i, x in enumerate(rows, start=1)]
+        if interaction.user.id not in {x["user_id"] for x in rows}:
+            mine = db.wallet(interaction.user.id, interaction.user.display_name)
+            place, players = db.rank_of(interaction.user.id)
+            lines.append(f"\nYou: {db.ordinal(place)} of {players}, {mine['balance']:,}")
         season = db.current_season(interaction.guild_id)
         embed = discord.Embed(title=f"{season['name']} standings" if season else "Standings",
                               description="\n".join(lines), color=0xFFB114)
@@ -1276,36 +1577,40 @@ class Bonus(commands.Cog):
     bonus = app_commands.Group(name="bonus", description="Mid-game bonus questions.",
                                default_permissions=CREW_VISIBLE)
 
-    async def _close_later(self, market_id: int, message: discord.Message, seconds: int):
-        await asyncio.sleep(seconds)
-        db.lock_expired_bonuses()
-        m = db.market_by_id(market_id)
-        try:
-            await message.edit(embed=bonus_embed(m), view=bonus_view(market_id, disabled=True))
-        except discord.HTTPException:
-            pass  # message deleted or channel gone; the clock still closed the market
-
-    @bonus.command(description="Open a quick bonus question during the race.")
+    @bonus.command(name="bet", description="Open a bonus bet: pick a type and a question. Answers fill themselves in.")
     @app_commands.describe(
-        question="e.g. Who wins the next minigame?",
-        options="Comma-separated answers. Leave blank for tonight's four characters.",
-        seconds="How long betting stays open (default 90)",
-        pays="Multiplier. Leave blank for one better than fair.")
+        question="e.g. Will Luigi turn it around? or Who's first to land on the bank?",
+        type="Pick a character (back up to 2), Yes or No (back one side), or Minigame winner (adds Draw at 8x)",
+        timer="How long betting stays open. 'Until betting locks' for bets set up at the start",
+        answers="Optional: your own answers, comma-separated, instead of the type's",
+        pays="Optional multiplier. Leave blank for fair odds")
+    @app_commands.choices(
+        type=[app_commands.Choice(name=v["label"], value=k) for k, v in economy.BONUS_TYPES.items()],
+        timer=[app_commands.Choice(name="60 seconds", value=60),
+               app_commands.Choice(name="90 seconds", value=90),
+               app_commands.Choice(name="3 minutes", value=180),
+               app_commands.Choice(name="Until betting locks for the race", value=0)])
     @staff_only()
-    async def open(self, interaction: discord.Interaction, question: str, options: str = "",
-                   seconds: app_commands.Range[int, 15, 600] = 90,
-                   pays: app_commands.Range[int, 2, 20] | None = None):
+    async def bet(self, interaction: discord.Interaction, question: str,
+                  type: app_commands.Choice[str], timer: app_commands.Choice[int] | None = None,
+                  answers: str = "", pays: app_commands.Range[int, 2, 20] | None = None):
         r = require_race(interaction.guild_id)
-        answers = [o.strip() for o in options.split(",") if o.strip()] if options else \
-            [e["name"] for e in db.entrants(r["id"])]
-        if not 2 <= len(answers) <= 10 or len(set(a.lower() for a in answers)) != len(answers):
-            raise Refusal("Between 2 and 10 different answers, please.")
-        market_id = db.open_bonus(r["id"], question, answers, seconds, pays)
-        m = db.market_by_id(market_id)
-        await interaction.response.send_message(embed=bonus_embed(m), view=bonus_view(market_id))
-        message = await interaction.original_response()
-        db.attach_message(market_id, message.channel.id, message.id)
-        self.bot.spawn(self._close_later(market_id, message, seconds))
+        field = [e["name"] for e in db.entrants(r["id"])]
+        kind = type.value
+        if answers.strip():
+            options = [o.strip() for o in answers.split(",") if o.strip()]
+            kind = "yesno" if kind == "yesno" else "custom" if kind != "character" else kind
+        elif kind == "yesno":
+            options = ["Yes", "No"]
+        elif kind == "minigame":
+            options = field + [economy.DRAW]
+        else:
+            options = field
+        if not 2 <= len(options) <= 20 or len({o.lower() for o in options}) != len(options):
+            raise Refusal("Between 2 and 20 different answers, please.")
+        seconds = (timer.value if timer is not None
+                   else economy.BONUS_TYPES.get(type.value, {"seconds": 90})["seconds"]) or None
+        await open_bonus_post(interaction, r["id"], question, kind, options, seconds, pays)
 
     @bonus.command(description="Settle a bonus question. Pays out immediately.")
     @app_commands.autocomplete(market=bonus_options, winner=bonus_answer_options)
@@ -1316,11 +1621,10 @@ class Bonus(commands.Cog):
             market_id = int(market)
         except ValueError:
             raise Refusal("Pick the bonus from the list.")
-        db.lock_expired_bonuses()
-        m = db.market_by_id(market_id)
-        if m is not None and m["status"] == "open" and m["result"] is None:
-            raise Refusal("That bonus is still taking bets. Let the clock run out first.")
-        await interaction.response.send_message(call_text(db.call_market_id(market_id, winner)))
+        db.close_bonus(market_id)                # paying out closes betting first
+        out = db.call_market_id(market_id, winner)
+        await interaction.response.send_message(call_text(out))
+        await refresh_bonus_post(self.bot, market_id)
 
     @bonus.command(description="Void a bonus question and refund it.")
     @app_commands.autocomplete(market=bonus_options)
@@ -1332,6 +1636,7 @@ class Bonus(commands.Cog):
         except ValueError:
             raise Refusal("Pick the bonus from the list.")
         await interaction.response.send_message(call_text(db.call_market_id(market_id, None)))
+        await refresh_bonus_post(self.bot, market_id)
 
 
 # --------------------------------------------------------------------- ads
@@ -1356,8 +1661,10 @@ def create_ad(user_id: int, name: str, crew: bool, headline: str, body: str = ""
         image_type = adrules.sniff_image(image)
         if image_type is None:
             return None, "That file isn't a PNG, JPG, GIF or WebP image."
+    # Every ad waits for review, crew ones included, so each one is approved
+    # on its own merits before it can air.
     if crew:
-        status, tag, weight = "live", adrules.clean_text(tag, adrules.MAX_TAG), max(1, min(10, weight))
+        status, tag, weight = "pending", adrules.clean_text(tag, adrules.MAX_TAG), max(1, min(10, weight))
     else:
         waiting = [a for a in db.ads(status="pending", submitted_by=user_id)]
         if len(waiting) >= adrules.MAX_PENDING_PER_PERSON:
@@ -1369,7 +1676,7 @@ def create_ad(user_id: int, name: str, crew: bool, headline: str, body: str = ""
                       status=status, submitted_by=user_id, submitted_name=name,
                       image_blob=image, image_type=image_type)
     if crew:
-        return ad_id, f"Ad #{ad_id} is in the rotation. It'll show on stream within a few seconds."
+        return ad_id, f"Ad #{ad_id} is in the review queue. Approve it with `/review-ads`."
     return ad_id, (f"Thanks {name}! Your ad \"{headline}\" is with the crew for review. "
                    "It goes into the rotation once it's approved.")
 
@@ -1380,6 +1687,8 @@ def ad_line(a) -> str:
         extras.append("image")
     if a["weight"] > 1:
         extras.append(f"weight {a['weight']}")
+    if a["pinned"]:
+        extras.append("pinned, every 4th ad")
     if a["submitted_name"] and a["submitted_name"] != "config/ads.json":
         extras.append(f"from {a['submitted_name']}")
     tail = f" ({', '.join(extras)})" if extras else ""
@@ -1436,6 +1745,16 @@ class AdReview(discord.ui.View):
             return
         await self._next(interaction, f"Approved #{self.ad_id} \"{a['headline']}\". It's in the rotation.")
 
+    @discord.ui.button(label="Approve and pin", style=discord.ButtonStyle.primary)
+    async def approve_pin(self, interaction: discord.Interaction, button: discord.ui.Button):
+        a = db.ad(self.ad_id)
+        if a is None or not db.approve_ad(self.ad_id, interaction.user.id):
+            await self._next(interaction, "Someone already dealt with that one.")
+            return
+        db.set_pinned(self.ad_id, True)
+        await self._next(interaction, f"Approved and pinned #{self.ad_id} \"{a['headline']}\". "
+                                      "It comes back every 4th ad.")
+
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         a = db.ad(self.ad_id)
@@ -1465,7 +1784,7 @@ class Ads(commands.Cog):
 
     ad = app_commands.Group(name="ad", description="The fake ads that run on stream.")
 
-    @ad.command(description="Send in a fake ad. Crew ads go live; others go to the crew first.")
+    @ad.command(name="submit", description="Send in a fake ad for the stream. The crew approves each one.")
     @app_commands.describe(
         headline="Big text, up to 60 characters",
         body="Smaller line underneath, up to 120 characters",
@@ -1473,8 +1792,8 @@ class Ads(commands.Cog):
         tag="Crew only: small corner label. Everyone else's say who made it",
         accent="Stripe colour as a hex code, like #5865f2",
         weight="Crew only: how often it comes up, 1 to 10")
-    async def add(self, interaction: discord.Interaction,
-                  headline: app_commands.Range[str, 1, 60],
+    async def submit(self, interaction: discord.Interaction,
+                     headline: app_commands.Range[str, 1, 60],
                   body: app_commands.Range[str, 0, 120] = "",
                   image: discord.Attachment | None = None,
                   tag: app_commands.Range[str, 0, 40] = "",
@@ -1535,7 +1854,7 @@ class Ads(commands.Cog):
         else:
             mine = db.ads(submitted_by=interaction.user.id)
             if not mine:
-                raise Refusal("You haven't sent in any ads. `/ad add` to make one.")
+                raise Refusal("You haven't sent in any ads. `/ad submit` to make one.")
             parts = [ad_line(a) + (": live" if a["status"] == "live" else ": waiting for review")
                      for a in mine]
         await interaction.response.send_message("\n".join(parts)[:1900], ephemeral=True)

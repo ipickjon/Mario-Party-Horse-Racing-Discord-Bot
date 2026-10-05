@@ -85,11 +85,11 @@ def test_full_broadcast_night(fresh_db):
         assert "You have 100 points" in broke.text
 
         await run(bot, "bet", as_(ANA), amount=50, **order("Mario", "Luigi", "Yoshi", "Peach"))
-        await run(bot, "prop", as_(ANA), market="Most coins at the end", pick="Peach", amount=20)
+        await run(bot, "sidebet", as_(ANA), market="Most coins at the end", pick="Peach", amount=20)
         await run(bot, "bet", as_(ROB), amount=60, **order("Luigi", "Mario", "Yoshi", "Peach"))
-        await run(bot, "prop", as_(ROB), market="Most ? tiles stepped on", pick="Peach", amount=40)
+        await run(bot, "sidebet", as_(ROB), market="Most ? tiles stepped on", pick="Peach", amount=40)
         await run(bot, "bet", as_(KIM), amount=30, **order("Mario", "Peach", "Yoshi", "Luigi"))
-        await run(bot, "prop", as_(KIM), market="Most minigames won", pick="Yoshi", amount=20)
+        await run(bot, "sidebet", as_(KIM), market="Most minigames won", pick="Yoshi", amount=20)
 
         rules = await run(bot, "payouts", as_(KIM))
         assert "most coins when the race ends" in rules.text
@@ -119,36 +119,44 @@ def test_full_broadcast_night(fresh_db):
         assert db.tallies(db.active_race(42)["id"])["Mario"]["qtiles"] == 1
         for who in ("Won: Yoshi", "Won: Yoshi", "Won: Luigi", "Won: Luigi"):
             await press(pb[who])                      # minigames end tied
-        for _ in range(36):
+        for _ in range(21):                                # one more than the game has
             last = await press(pb["Next turn"])
-        assert "Turn 35 of 35" in last.edits[0]["content"]
+        assert "Turn 20 of 20" in last.edits[0]["content"]
 
-        # --- bonus question ----------------------------------------------------------
-        opened = await run(bot, "bonus open", staff(), question="Who wins the next minigame?",
-                           seconds=15)
+        # --- bonus question, run from the crew buttons on the post ------------------------
+        opened = await run(bot, "bonus bet", staff(), question="Who wins the next minigame?",
+                           type="Pick a character", timer="60 seconds")
         bonus_id = db.bonus_markets(db.active_race(42)["id"])[0]["id"]
-        assert "Pays **4x**" in opened.text           # fair odds on a four-way pick
+        assert "Pays **4x**" in opened.text and "Back up to 2 answers" in opened.text
         bb = buttons(opened.sent[0]["view"])
+        assert {"Crew: Close now", "Crew: Pay out", "Crew: Delete"} <= set(bb)
+
         modal = (await press(bb["Mario"], ANA)).modals[0]
         modal.amount._value = "20"
         confirm = as_(ANA)
         await modal.on_submit(confirm)
         assert "20 on **Mario**" in confirm.text
+        assert any(getattr(c, "item", c).label == "Undo this bet" for c in confirm.sent[0]["view"].children)
+        assert "ana 20" in confirm.message.edits[-1]["embed"].description   # names on the post
         junk_modal = (await press(bb["Luigi"], KIM)).modals[0]
         junk_modal.amount._value = "lots"
         junk = as_(KIM)
         await junk_modal.on_submit(junk)
         assert "Whole points only." in junk.text
 
-        assert "still taking bets" in (await run(bot, "bonus call", staff(),
-                                                 market=str(bonus_id), winner="Mario")).text
-        with db.connect() as conn:
-            conn.execute("UPDATE markets SET closes_at = ? WHERE id = ?", (time.time() - 1, bonus_id))
-        await bot.get_cog("Bonus")._close_later(bonus_id, opened.message, 0)
-        assert all(c.item.disabled for c in opened.message.edits[-1]["view"].children)
+        assert "Crew only." in (await press(bb["Crew: Close now"], ROB)).text
+        closed = await press(bb["Crew: Close now"])
+        assert all(c.item.disabled for c in closed.edits[-1]["view"].children
+                   if getattr(c.item, "label", "") in ("Mario", "Luigi", "Peach", "Yoshi"))
         assert "That bonus is closed." in (await press(bb["Peach"], ROB)).text
-        called = await run(bot, "bonus call", staff(), market=str(bonus_id), winner="Mario")
-        assert "paying 4x" in called.text
+
+        pay = await press(bb["Crew: Pay out"])
+        picker = pay.sent[0]["view"]
+        assert pay.sent[0]["ephemeral"] and picker.pick.max_values == 2   # 2 v 2 allowed
+        picker.pick._values = ["Mario"]
+        chose = staff()
+        await picker.chosen(chose)
+        assert "paying 4x" in chose.text
 
         # --- post-game: one command ------------------------------------------------------
         rid = db.active_race(42)["id"]
@@ -205,7 +213,7 @@ def test_full_broadcast_night(fresh_db):
     for page in ("tote", "bug", "bonus", "casters", "ads", "standings"):
         assert client.get(f"/{page}").status_code == 200, page
     state = client.get("/state.json").json()
-    assert state["race"]["turn"] == 35 and state["race"]["status"] == "settled"
+    assert state["race"]["turn"] == 20 and state["race"]["status"] == "settled"
     assert [m["label"] for m in state["markets"]][:4] == [
         "Finishes 1st", "Finishes 2nd", "Finishes 3rd", "Finishes 4th"]
     first = state["markets"][0]["runners"]
@@ -231,9 +239,9 @@ def test_mario_kart_sized_field(fresh_db):
         swapped = racers[:]
         swapped[10], swapped[11] = swapped[11], swapped[10]
         await run(bot, "bet", as_(ROB), amount=10, **order(*swapped))
-        prop = await run(bot, "prop", as_(KIM), market="Most coins at the end",
+        prop = await run(bot, "sidebet", as_(KIM), market="Most coins at the end",
                          pick="Racer1", amount=10)
-        assert "no props" in prop.text
+        assert "no side bets" in prop.text
 
         panel = await run(bot, "panel", staff())
         labels = {c.item.label for c in panel.sent[0]["view"].children}
@@ -351,7 +359,7 @@ def test_refusals_reach_the_player_intact(fresh_db):
         bot = await build_bot()
         for path, kwargs in [
             ("bet", dict(amount=10, **order("Mario", "Luigi", "Peach", "Yoshi"))),
-            ("prop", dict(market="Most coins at the end", pick="Mario", amount=10)),
+            ("sidebet", dict(market="Most coins at the end", pick="Mario", amount=10)),
             ("mybets", {}), ("board", {}), ("leaderboard", {}), ("season status", {}),
         ]:
             out = await run(bot, path, as_(ANA), **kwargs)
@@ -431,8 +439,8 @@ def test_command_tree_is_valid_for_discord(fresh_db):
         return sorted(c.qualified_name for c in bot.tree.walk_commands())
 
     names = asyncio.run(go())
-    for required in ("bet", "prop", "leaderboard", "reset", "race result", "panel",
-                     "show next", "bonus open", "race autograde", "status", "review-ads"):
+    for required in ("bet", "sidebet", "bets", "leaderboard", "reset", "race result", "panel",
+                     "show next", "bonus bet", "race autograde", "status", "review-ads"):
         assert required in names
     assert "season start" not in names          # replaced by /reset
 
@@ -457,14 +465,14 @@ def test_the_setup_guide_dry_run_behaves_as_written(fresh_db):
         assert "Pre-show" in started.text and "open" in started.text
         bet = await run(bot, "bet", me(), amount=10, **order("Mario", "Luigi", "Peach", "Yoshi"))
         assert "You have 90 points left" in bet.text                        # 53
-        await run(bot, "prop", me(), market="Most coins at the end", pick="Peach", amount=5)  # 54
+        await run(bot, "sidebet", me(), market="Most coins at the end", pick="Peach", amount=5)  # 54
         await run(bot, "show next", me())                                   # 59
         game = await run(bot, "show next", me())
         assert "locked" in game.text and "control panel is below" in game.text
         pb = buttons(game.sent[1]["view"])                                  # 60
         for label in ("? Peach", "? Peach", "Won: Yoshi", "Next turn", "Undo last"):
             await press(pb[label], jon)
-        opened = await run(bot, "bonus open", me(), question="Test bonus", seconds=30)  # 62
+        opened = await run(bot, "bonus bet", me(), question="Test bonus", type="Pick a character", timer="60 seconds")  # 62
         bid = db.bonus_markets(db.active_race(42)["id"])[0]["id"]
         modal = (await press(buttons(opened.sent[0]["view"])["Mario"], jon)).modals[0]
         modal.amount._value = "5"

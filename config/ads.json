@@ -7,22 +7,20 @@
     "  body    one line under the headline",
     "  tag     small text in the corner, e.g. who made it",
     "  accent  hex colour for the rule and the tag",
-    "  image   filename inside config/ads/ — if set, the image fills the",
+    "  image   filename inside config/ads/ \u2014 if set, the image fills the",
     "          slot and headline/body are ignored",
-    "  weight  how often this slot comes up, default 1",
     "",
-    "Keep at least one Discord promo in rotation."
+    "Keep at least one Discord promo in rotation.",
+    "  pinned  true to bring this ad back every 4th ad, like the Discord promo"
   ],
-
   "dwell_seconds": 12,
-
   "slots": [
     {
       "headline": "Join the Discord",
       "body": "Place your bets, argue about Peach, get pinged when we go live.",
       "tag": "the only real link on this board",
       "accent": "#5865f2",
-      "weight": 3
+      "pinned": true
     },
     {
       "headline": "Bowser Bros. Demolition",

@@ -35,11 +35,11 @@ PLACEMENT_LADDER = {1: 1, 2: 2, 4: 4}
 
 PROP_MULTIPLIER = 2
 
-STARTING_BALANCE = 100
+STARTING_BALANCE = 1_000
 
 # Opt-in via /railmoney: anyone below this is topped back up to it. Pays
 # nobody who is already above it, so the leaderboard still ranks results.
-RAIL_FLOOR = 100
+RAIL_FLOOR = 1_000
 
 # Broadcasts per season, used for the season progress readout.
 SEASON_LENGTH = 10
@@ -74,6 +74,21 @@ def slate_multiplier(correct: int) -> int:
     if correct <= 0:
         return 0
     return PLACEMENT_LADDER.get(correct, correct)
+
+
+# Bonus bets. Each type sets how many different answers one person may back:
+# one side of a yes/no, at most two characters.
+BONUS_TYPES = {
+    "character": {"label": "Pick a character", "max_picks": 2, "seconds": 90},
+    "yesno": {"label": "Yes or No", "max_picks": 1, "seconds": 90},
+    "minigame": {"label": "Minigame winner", "max_picks": 2, "seconds": 60},
+}
+DRAW = "Draw"
+DRAW_MULTIPLIER = 8           # a minigame draw is rare, so it pays big
+
+# Comeback: anyone at zero still gets one free pick on each minigame bet,
+# worth this much if it lands.
+COMEBACK_PRIZE = 10
 
 
 def bonus_multiplier(options: int) -> int:

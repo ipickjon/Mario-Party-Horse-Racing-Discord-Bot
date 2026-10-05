@@ -139,7 +139,10 @@ function render() {
 
   const clock = document.getElementById("clock");
   clock.className = "clock";
-  if (bonus.state === "open") {
+  if (bonus.state === "open" && bonus.until_lock) {
+    clock.textContent = "Open";
+    clock.classList.add("done");
+  } else if (bonus.state === "open") {
     const left = Math.max(0, bonus.closes_at - (Date.now() + skew) / 1000);
     const s = Math.ceil(left);
     clock.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -162,7 +165,7 @@ function render() {
   const top = Math.max(1, ...bonus.options.map(o => o.staked));
   for (const o of bonus.options) {
     const row = document.createElement("div");
-    row.className = "opt" + (bonus.result === o.name ? " win" : "");
+    row.className = "opt" + ((bonus.winners || []).includes(o.name) ? " win" : "");
     const pct = bonus.staked ? Math.round(o.share * 100) + "%" : "—";
     row.innerHTML = `
       <div class="cloth" style="background:${o.color}">${o.slot || ""}</div>
